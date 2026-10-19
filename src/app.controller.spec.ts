@@ -17,7 +17,6 @@ describe('AppController', () => {
   describe('root', () => {
     it('should return the health status', () => {
       expect(appController.getHealth()).toEqual({
-        status: 200,
         service_name: 'backend-service',
         message: 'ok',
         timestamp: expect.any(String)

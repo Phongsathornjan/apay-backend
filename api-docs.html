@@ -1,0 +1,1401 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>APay Backend — API Documentation (Swagger UI)</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css" />
+  <style>
+    :root {
+      --apay-bg: #0f172a;
+      --apay-surface: #1e293b;
+      --apay-accent: #10b981;
+      --apay-accent-hover: #059669;
+      --apay-text: #f8fafc;
+      --apay-muted: #94a3b8;
+      --apay-border: #334155;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Thai", sans-serif;
+    }
+
+    .apay-topbar {
+      background: linear-gradient(135deg, var(--apay-bg) 0%, #1e293b 100%);
+      color: var(--apay-text);
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--apay-border);
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .apay-topbar-inner {
+      max-width: 1420px;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .apay-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .apay-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #10b981, #047857);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 18px;
+      color: #ffffff;
+      letter-spacing: -0.5px;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+    }
+
+    .apay-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .apay-badge {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    .apay-subtitle {
+      margin: 2px 0 0 0;
+      font-size: 12px;
+      color: var(--apay-muted);
+    }
+
+    .apay-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .apay-server-control {
+      display: flex;
+      align-items: center;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--apay-border);
+      border-radius: 8px;
+      padding: 4px 8px;
+      gap: 6px;
+    }
+
+    .apay-server-control label {
+      font-size: 12px;
+      color: var(--apay-muted);
+      font-weight: 600;
+    }
+
+    .apay-server-control input {
+      background: transparent;
+      border: none;
+      color: #fff;
+      font-size: 13px;
+      width: 220px;
+      outline: none;
+      font-family: monospace;
+    }
+
+    .apay-btn {
+      background: var(--apay-accent);
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .apay-btn:hover {
+      background: var(--apay-accent-hover);
+    }
+
+    .apay-btn-secondary {
+      background: #334155;
+      color: #e2e8f0;
+    }
+
+    .apay-btn-secondary:hover {
+      background: #475569;
+    }
+
+    #swagger-ui {
+      max-width: 1420px;
+      margin: 0 auto;
+      padding: 12px 16px 60px;
+    }
+
+    .swagger-ui .topbar {
+      display: none;
+    }
+
+    .swagger-ui .info {
+      margin: 24px 0;
+    }
+  </style>
+</head>
+<body>
+  <header class="apay-topbar">
+    <div class="apay-topbar-inner">
+      <div class="apay-brand">
+        <div class="apay-logo">A</div>
+        <div>
+          <h1 class="apay-title">
+            APay Backend API
+            <span class="apay-badge">v1.0 • OpenAPI 3.0.3</span>
+          </h1>
+          <p class="apay-subtitle">PromptPay QR Payment &amp; KBank LINE Webhook Verification Service</p>
+        </div>
+      </div>
+
+      <div class="apay-actions">
+        <div class="apay-server-control">
+          <label for="custom-server-url">Base URL:</label>
+          <input
+            id="custom-server-url"
+            type="text"
+            value="http://localhost:3000"
+            placeholder="http://localhost:3000"
+          />
+          <button class="apay-btn" type="button" onclick="applyCustomServer()">Apply</button>
+        </div>
+        <button class="apay-btn apay-btn-secondary" type="button" onclick="downloadOpenApiJson()">
+          Download openapi.json
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div id="swagger-ui"></div>
+
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-standalone-preset.js"></script>
+  <script>
+    const openApiSpec = {
+      openapi: "3.0.3",
+      info: {
+        title: "APay Backend API",
+        version: "1.0.0",
+        description: [
+          "ระบบจัดการการชำระเงินด้วย **PromptPay QR Code** และตรวจสอบยอดเงินเข้าอัตโนมัติผ่าน **KBank LINE Official Notification Webhook**",
+          "",
+          "---",
+          "### รูปแบบ Response มาตรฐาน (Global Envelope)",
+          "- **Success (`2xx`)**: ถูกห่อด้วย `ResponseInterceptor` เสมอในรูปแบบ `{ ok: true, status, correlation_id, data }`",
+          "- **Error (`4xx / 5xx`)**: ถูกจัดรูปแบบด้วย `HttpErrorFilter` ในรูปแบบ `{ ok: false, status, correlation_id, message }`",
+          "- **Correlation ID**: ทุก Request สามารถแนบ Header `x-correlation-id` มาได้ หากไม่แนบระบบจะสร้าง UUID ให้โดยอัตโนมัติ",
+          "",
+          "### ลำดับการใช้งานหลัก (Integration Flow)",
+          "1. **Admin** เข้าสู่ระบบผ่าน `POST /api/v1/auth/login` แล้วสร้างบัญชีร้านค้าผ่าน `POST /api/v1/auth/register-business` เพื่อรับ `api_key` (`apay_live_<8_hex>_<32_hex>`)",
+          "2. **Business / Merchant** นำ `api_key` มาแลกเป็น JWT (`access_token`, `refresh_token`) ที่ `POST /api/v1/auth/token` (หรือเข้าสู่ระบบด้วย username/password)",
+          "3. **สร้างรายการชำระเงิน PromptPay QR** ที่ `POST /api/v1/payments/qr` ระบบจะจองทศนิยมอ้างอิง (`0.01` - `0.99`) ให้โดยอัตโนมัติ มีอายุ **5 นาที**",
+          "4. เมื่อลูกค้าโอนเงินและ LINE KBank แจ้งเตือนมายัง `POST /api/v1/webhooks/kbank/line` ระบบจะจับคู่ยอด (`lookup_key = YYYYMMDD_<total_amount>`) เปลี่ยนสถานะเป็น `PAID` และยิง Webhook Callback (`event: 'payment.paid'`) ไปยัง `redirect_url` ของออเดอร์นั้นทันที"
+        ].join("\n")
+      },
+      servers: [
+        {
+          url: "http://localhost:3000",
+          description: "Local Development Server"
+        }
+      ],
+      tags: [
+        {
+          name: "Health",
+          description: "ตรวจสอบสถานะความพร้อมของระบบ (Service Health Check)"
+        },
+        {
+          name: "Auth",
+          description: "การยืนยันตัวตน, ลงทะเบียนธุรกิจ, แลก API Key เป็น JWT และต่ออายุ Token"
+        },
+        {
+          name: "Payments",
+          description: "สร้าง PromptPay QR Payment Order และตรวจสอบสถานะคำสั่งซื้อ"
+        },
+        {
+          name: "Webhooks",
+          description: "รับแจ้งเตือนข้อความเงินเข้าจาก KBank LINE Webhook และส่ง Callback แจ้งผลการชำระเงิน"
+        }
+      ],
+      components: {
+        securitySchemes: {
+          BearerAuth: {
+            type: "http",
+            scheme: "bearer",
+            bearerFormat: "JWT",
+            description: "ใส่เฉพาะค่า `access_token` ที่ได้จาก `/api/v1/auth/login`, `/api/v1/auth/token` หรือ `/api/v1/auth/refresh`"
+          },
+          ApiKeyHeader: {
+            type: "apiKey",
+            in: "header",
+            name: "x-api-key",
+            description: "รหัส API Key ของธุรกิจ รูปแบบ `apay_live_<8_hex>_<32_hex>` (ใช้สำหรับ `/api/v1/auth/token`)"
+          }
+        },
+        parameters: {
+          CorrelationIdHeader: {
+            name: "x-correlation-id",
+            in: "header",
+            required: false,
+            description: "UUID สำหรับติดตาม Request (หากไม่ระบุ ระบบจะสร้างให้อัตโนมัติ)",
+            schema: {
+              type: "string",
+              format: "uuid",
+              example: "550e8400-e29b-41d4-a716-446655440000"
+            }
+          }
+        },
+        schemas: {
+          ErrorEnvelope: {
+            type: "object",
+            required: ["ok", "status", "correlation_id", "message"],
+            properties: {
+              ok: {
+                type: "boolean",
+                example: false
+              },
+              status: {
+                type: "integer",
+                example: 401
+              },
+              correlation_id: {
+                type: "string",
+                format: "uuid",
+                example: "550e8400-e29b-41d4-a716-446655440000"
+              },
+              message: {
+                type: "string",
+                example: "Unauthorized"
+              }
+            }
+          },
+          HealthData: {
+            type: "object",
+            required: ["service_name", "message", "timestamp"],
+            properties: {
+              service_name: {
+                type: "string",
+                example: "backend-service"
+              },
+              message: {
+                type: "string",
+                example: "ok"
+              },
+              timestamp: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:30:00.000Z"
+              }
+            }
+          },
+          LoginRequest: {
+            type: "object",
+            required: ["username", "password"],
+            properties: {
+              username: {
+                type: "string",
+                minLength: 1,
+                example: "admin",
+                description: "ชื่อผู้ใช้งาน (admin หรือ business)"
+              },
+              password: {
+                type: "string",
+                minLength: 1,
+                example: "P@ssw0rd123",
+                description: "รหัสผ่าน"
+              }
+            }
+          },
+          AuthUserSummary: {
+            type: "object",
+            required: ["user_id", "username", "role", "business_id"],
+            properties: {
+              user_id: {
+                type: "string",
+                format: "uuid",
+                example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              },
+              username: {
+                type: "string",
+                example: "merchant_shop01"
+              },
+              role: {
+                type: "string",
+                enum: ["admin", "business"],
+                example: "business"
+              },
+              business_id: {
+                type: "string",
+                format: "uuid",
+                nullable: true,
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+                description: "มีค่าเมื่อ role เป็น `business` และเป็น `null` เมื่อ role เป็น `admin`"
+              }
+            }
+          },
+          TokenBundle: {
+            type: "object",
+            required: ["access_token", "refresh_token", "token_type", "expires_in"],
+            properties: {
+              access_token: {
+                type: "string",
+                example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+              },
+              refresh_token: {
+                type: "string",
+                example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+              },
+              token_type: {
+                type: "string",
+                enum: ["Bearer"],
+                example: "Bearer"
+              },
+              expires_in: {
+                type: "integer",
+                example: 900,
+                description: "อายุของ access_token เป็นวินาที (ค่าเริ่มต้น 900 วินาที = 15 นาที)"
+              }
+            }
+          },
+          LoginData: {
+            allOf: [
+              { $ref: "#/components/schemas/TokenBundle" },
+              {
+                type: "object",
+                required: ["user"],
+                properties: {
+                  user: {
+                    $ref: "#/components/schemas/AuthUserSummary"
+                  }
+                }
+              }
+            ]
+          },
+          RegisterBusinessRequest: {
+            type: "object",
+            required: ["username", "password", "business_name", "promptpay_id"],
+            properties: {
+              username: {
+                type: "string",
+                maxLength: 100,
+                example: "merchant_shop01",
+                description: "ชื่อผู้ใช้สำหรับร้านค้า (ห้ามซ้ำ)"
+              },
+              password: {
+                type: "string",
+                minLength: 8,
+                example: "StrongPass123!",
+                description: "รหัสผ่านอย่างน้อย 8 ตัวอักษร"
+              },
+              business_name: {
+                type: "string",
+                maxLength: 150,
+                example: "APay Demo Coffee Shop",
+                description: "ชื่อธุรกิจหรือร้านค้า"
+              },
+              promptpay_id: {
+                type: "string",
+                pattern: "^(\\d{10}|\\d{13})$",
+                example: "0812345678",
+                description: "หมายเลขพร้อมเพย์: เบอร์โทรศัพท์ 10 หลัก หรือ เลขประจำตัวประชาชน/นิติบุคคล 13 หลัก"
+              },
+              line_destination: {
+                type: "string",
+                maxLength: 64,
+                nullable: true,
+                example: "U1234567890abcdef1234567890abcdef",
+                description: "(Optional) LINE Bot Destination User ID"
+              }
+            }
+          },
+          RegisterBusinessData: {
+            type: "object",
+            required: [
+              "user_id",
+              "username",
+              "role",
+              "business_id",
+              "business_name",
+              "promptpay_id",
+              "api_key"
+            ],
+            properties: {
+              user_id: {
+                type: "string",
+                format: "uuid",
+                example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              },
+              username: {
+                type: "string",
+                example: "merchant_shop01"
+              },
+              role: {
+                type: "string",
+                enum: ["business"],
+                example: "business"
+              },
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              business_name: {
+                type: "string",
+                example: "APay Demo Coffee Shop"
+              },
+              promptpay_id: {
+                type: "string",
+                example: "0812345678"
+              },
+              api_key: {
+                type: "string",
+                example: "apay_live_1a2b3c4d_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c",
+                description: "แสดงเพียงครั้งเดียวตอนลงทะเบียน! โปรดเก็บรักษาไว้เป็นความลับ"
+              }
+            }
+          },
+          GetTokenRequest: {
+            type: "object",
+            properties: {
+              api_key: {
+                type: "string",
+                example: "apay_live_1a2b3c4d_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c",
+                description: "(Optional หากส่งผ่าน Header `x-api-key` แล้ว) รหัส API Key ของธุรกิจ"
+              }
+            }
+          },
+          RefreshTokenRequest: {
+            type: "object",
+            required: ["refresh_token"],
+            properties: {
+              refresh_token: {
+                type: "string",
+                example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                description: "Refresh Token ล่าสุดที่ได้รับจาก `/login`, `/token` หรือ `/refresh`"
+              }
+            }
+          },
+          CreateQrRequest: {
+            type: "object",
+            required: ["amount", "redirect_url"],
+            properties: {
+              amount: {
+                type: "number",
+                minimum: 1,
+                example: 100,
+                description: "จำนวนเงินตั้งต้น (ต้อง >= 1 ระบบจะปัดลงเป็นจำนวนเต็ม `base_amount` แล้วบวก `decimal_ref` 0.01–0.99 อัตโนมัติ)"
+              },
+              redirect_url: {
+                type: "string",
+                format: "uri",
+                example: "https://merchant.example.com/webhooks/apay",
+                description: "URL ปลายทางสำหรับรับ HTTP POST Webhook Callback เมื่อการชำระเงินสำเร็จ (`payment.paid`)"
+              }
+            }
+          },
+          CreateQrData: {
+            type: "object",
+            required: [
+              "order_id",
+              "lookup_key",
+              "base_amount",
+              "decimal_ref",
+              "total_amount",
+              "qr_payload",
+              "qr_image",
+              "status",
+              "redirect_url",
+              "expires_at"
+            ],
+            properties: {
+              order_id: {
+                type: "string",
+                example: "20261020153045_100.01",
+                description: "รหัสคำสั่งซื้อ รูปแบบ `YYYYMMDDHHmmss_<total_amount>` (เวลา Asia/Bangkok)"
+              },
+              lookup_key: {
+                type: "string",
+                example: "20261020_100.01",
+                description: "คีย์สำหรับจับคู่ยอดเงินโอน รูปแบบ `YYYYMMDD_<total_amount>`"
+              },
+              base_amount: {
+                type: "number",
+                example: 100
+              },
+              decimal_ref: {
+                type: "number",
+                example: 0.01,
+                description: "เศษสตางค์อ้างอิงที่ระบบจองให้ (0.01 ถึง 0.99)"
+              },
+              total_amount: {
+                type: "number",
+                example: 100.01,
+                description: "ยอดเงินรวมที่ลูกค้าต้องโอนจริง (`base_amount + decimal_ref`)"
+              },
+              qr_payload: {
+                type: "string",
+                example: "00020101021229370016A000000677010111011300668123456785802TH53037645406100.016304ABCD",
+                description: "EMVCo PromptPay QR Payload"
+              },
+              qr_image: {
+                type: "string",
+                example: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+                description: "รูปภาพ QR Code ในรูปแบบ Base64 Data URL (`image/png`)"
+              },
+              status: {
+                type: "string",
+                enum: ["UNVERIFIED", "PAID", "EXPIRED"],
+                example: "UNVERIFIED"
+              },
+              redirect_url: {
+                type: "string",
+                format: "uri",
+                example: "https://merchant.example.com/webhooks/apay"
+              },
+              expires_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:35:45.000Z",
+                description: "วันเวลาหมดอายุของ QR (5 นาทีนับจากเวลาที่สร้าง)"
+              }
+            }
+          },
+          PaymentOrderDetailData: {
+            type: "object",
+            required: [
+              "order_id",
+              "lookup_key",
+              "business_id",
+              "base_amount",
+              "decimal_ref",
+              "total_amount",
+              "qr_payload",
+              "status",
+              "callback_sent",
+              "callback_status_code",
+              "redirect_url",
+              "expires_at",
+              "paid_at",
+              "created_at"
+            ],
+            properties: {
+              order_id: {
+                type: "string",
+                example: "20261020153045_100.01"
+              },
+              lookup_key: {
+                type: "string",
+                example: "20261020_100.01"
+              },
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              base_amount: {
+                type: "number",
+                example: 100
+              },
+              decimal_ref: {
+                type: "number",
+                example: 0.01
+              },
+              total_amount: {
+                type: "number",
+                example: 100.01
+              },
+              qr_payload: {
+                type: "string",
+                example: "00020101021229370016A000000677010111011300668123456785802TH53037645406100.016304ABCD"
+              },
+              status: {
+                type: "string",
+                enum: ["UNVERIFIED", "PAID", "EXPIRED"],
+                example: "PAID"
+              },
+              callback_sent: {
+                type: "boolean",
+                example: true
+              },
+              callback_status_code: {
+                type: "integer",
+                nullable: true,
+                example: 200
+              },
+              redirect_url: {
+                type: "string",
+                format: "uri",
+                example: "https://merchant.example.com/webhooks/apay"
+              },
+              expires_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:35:45.000Z"
+              },
+              paid_at: {
+                type: "string",
+                format: "date-time",
+                nullable: true,
+                example: "2026-10-20T08:31:12.000Z"
+              },
+              created_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:30:45.000Z"
+              }
+            }
+          },
+          LineWebhookRequest: {
+            type: "object",
+            properties: {
+              destination: {
+                type: "string",
+                example: "U1234567890abcdef1234567890abcdef"
+              },
+              events: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    type: {
+                      type: "string",
+                      example: "message"
+                    },
+                    timestamp: {
+                      type: "integer",
+                      example: 1792485072000,
+                      description: "Unix timestamp (milliseconds)"
+                    },
+                    source: {
+                      type: "object",
+                      properties: {
+                        type: {
+                          type: "string",
+                          example: "user"
+                        },
+                        userId: {
+                          type: "string",
+                          example: "Uabcdef1234567890abcdef1234567890"
+                        }
+                      }
+                    },
+                    message: {
+                      type: "object",
+                      required: ["type", "id"],
+                      properties: {
+                        type: {
+                          type: "string",
+                          example: "text"
+                        },
+                        id: {
+                          type: "string",
+                          example: "529384756102938475",
+                          description: "LINE Message ID (ใช้ตรวจสอบ Idempotency ป้องกันการประมวลผลซ้ำ)"
+                        },
+                        text: {
+                          type: "string",
+                          example: "รายการเงินเข้า บัญชี xxx-x-x1234-x จำนวนเงิน 100.01 บาท วันที่ 20/10/69 เวลา 15:31 น.",
+                          description: "ข้อความแจ้งเตือนเงินเข้าจาก KBank (รองรับคำค้น: จำนวนเงิน, จำนวน, เงินเข้า, รับโอนเงิน, รับโอน, รับเงิน, โอนเข้า และวันที่ พ.ศ./ค.ศ.)"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          WebhookProcessedData: {
+            type: "object",
+            required: ["processed"],
+            properties: {
+              processed: {
+                type: "integer",
+                example: 1,
+                description: "จำนวน Event ข้อความใหม่ที่ถูกนำมาประมวลผลในรอบนี้"
+              }
+            }
+          },
+          MerchantCallbackPayload: {
+            type: "object",
+            description: "Payload ที่ระบบ APay ยิง HTTP POST ไปยัง `redirect_url` ของร้านค้าเมื่อจับคู่ยอดโอนสำเร็จ (Timeout 5 วินาที)",
+            required: [
+              "ok",
+              "event",
+              "order_id",
+              "lookup_key",
+              "business_id",
+              "base_amount",
+              "decimal_ref",
+              "total_amount",
+              "status",
+              "paid_at"
+            ],
+            properties: {
+              ok: {
+                type: "boolean",
+                example: true
+              },
+              event: {
+                type: "string",
+                enum: ["payment.paid"],
+                example: "payment.paid"
+              },
+              order_id: {
+                type: "string",
+                example: "20261020153045_100.01"
+              },
+              lookup_key: {
+                type: "string",
+                example: "20261020_100.01"
+              },
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              base_amount: {
+                type: "number",
+                example: 100
+              },
+              decimal_ref: {
+                type: "number",
+                example: 0.01
+              },
+              total_amount: {
+                type: "number",
+                example: 100.01
+              },
+              status: {
+                type: "string",
+                enum: ["PAID"],
+                example: "PAID"
+              },
+              paid_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:31:12.000Z"
+              }
+            }
+          }
+        }
+      },
+      paths: {
+        "/api/v1/app/health": {
+          get: {
+            tags: ["Health"],
+            summary: "Health Check",
+            description: "ตรวจสอบสถานะการทำงานของเซิร์ฟเวอร์ APay Backend",
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            responses: {
+              "200": {
+                description: "ระบบทำงานปกติ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 200 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/HealthData" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/auth/login": {
+          post: {
+            tags: ["Auth"],
+            summary: "เข้าสู่ระบบด้วย Username & Password",
+            description: "ยืนยันตัวตนสำหรับผู้ใช้ระดับ `admin` หรือ `business` (กรณี `business` ระบบจะตรวจสอบว่าบัญชีธุรกิจยัง `is_active = true`) และคืนค่า JWT `access_token`, `refresh_token` พร้อมข้อมูลผู้ใช้",
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/LoginRequest" }
+                }
+              }
+            },
+            responses: {
+              "200": {
+                description: "เข้าสู่ระบบสำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 200 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/LoginData" }
+                      }
+                    }
+                  }
+                }
+              },
+              "400": {
+                description: "ข้อมูลที่ส่งมาไม่ถูกต้อง (Validation Error)",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "401": {
+                description: "ชื่อผู้ใช้/รหัสผ่านไม่ถูกต้อง หรือบัญชีถูกระงับ",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 401,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Invalid username or password"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/auth/register-business": {
+          post: {
+            tags: ["Auth"],
+            summary: "ลงทะเบียนบัญชีธุรกิจใหม่ (เฉพาะ Admin)",
+            description: "สร้าง `User` (`role = business`) และ `Business` ภายใต้ Database Transaction เดียวกัน พร้อมสร้าง `api_key` (`apay_live_<8_hex>_<32_hex>`) ซึ่งจะส่งคืนใน Response เพียงครั้งเดียวเท่านั้น",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/RegisterBusinessRequest" }
+                }
+              }
+            },
+            responses: {
+              "201": {
+                description: "สร้างบัญชีธุรกิจและ API Key สำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 201 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/RegisterBusinessData" }
+                      }
+                    }
+                  }
+                }
+              },
+              "401": {
+                description: "ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "403": {
+                description: "ไม่มีสิทธิ์เข้าถึง (ต้องเป็น Role `admin` เท่านั้น)",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "409": {
+                description: "ชื่อผู้ใช้ (username) ซ้ำกับที่มีอยู่ในระบบ",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 409,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Username already exists"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/auth/token": {
+          post: {
+            tags: ["Auth"],
+            summary: "แลกเปลี่ยน API Key เป็น JWT Token Bundle",
+            description: "รับ `api_key` จาก Request Body (`api_key`) หรือจาก Header (`x-api-key`) เพื่อตรวจสอบและออก `access_token` และ `refresh_token` สำหรับร้านค้า",
+            security: [{ ApiKeyHeader: [] }, {}],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "x-api-key",
+                in: "header",
+                required: false,
+                description: "API Key ของธุรกิจ (สามารถส่งทาง Header นี้ หรือส่งใน JSON Body `api_key` ก็ได้)",
+                schema: {
+                  type: "string",
+                  example: "apay_live_1a2b3c4d_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c"
+                }
+              }
+            ],
+            requestBody: {
+              required: false,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/GetTokenRequest" }
+                }
+              }
+            },
+            responses: {
+              "200": {
+                description: "ออก Token สำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 200 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/TokenBundle" }
+                      }
+                    }
+                  }
+                }
+              },
+              "401": {
+                description: "ไม่ได้ระบุ API Key หรือ API Key ไม่ถูกต้อง",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 401,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Invalid API key"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/auth/refresh": {
+          post: {
+            tags: ["Auth"],
+            summary: "ต่ออายุ JWT ด้วย Refresh Token (Token Rotation)",
+            description: "ตรวจสอบ `refresh_token` กับค่า SHA-256 Hash ล่าสุดในฐานข้อมูล แล้วออก `access_token` และ `refresh_token` ชุดใหม่ (Refresh Token เดิมจะถูกแทนที่ทันที)",
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/RefreshTokenRequest" }
+                }
+              }
+            },
+            responses: {
+              "200": {
+                description: "ต่ออายุ Token สำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 200 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/TokenBundle" }
+                      }
+                    }
+                  }
+                }
+              },
+              "401": {
+                description: "Refresh Token ไม่ถูกต้อง หมดอายุ หรือถูกใช้งานไปแล้ว",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 401,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Invalid refresh token"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/payments/qr": {
+          post: {
+            tags: ["Payments"],
+            summary: "สร้างรายการชำระเงิน PromptPay QR Code",
+            description: [
+              "สร้างคำสั่งซื้อและสร้าง PromptPay QR Code สำหรับร้านค้าของ Token ที่เรียกใช้งาน (รองรับ Role `business` และ `admin` ที่ผูกกับธุรกิจ)",
+              "",
+              "**รายละเอียดการทำงาน:**",
+              "- ปรับสถานะออเดอร์ `UNVERIFIED` ที่หมดอายุแล้ว (`expires_at <= now`) ให้เป็น `EXPIRED` โดยอัตโนมัติ",
+              "- ปัดเศษ `amount` ลงเป็นจำนวนเต็ม (`base_amount`) และจองค่า `decimal_ref` ที่ว่างอยู่ตั้งแต่ `0.01` ถึง `0.99`",
+              "- คำนวณ `total_amount = base_amount + decimal_ref` และสร้าง PromptPay EMVCo Payload พร้อมรูป Base64 PNG Data URL (`qr_image`)",
+              "- กำหนดเวลาหมดอายุ `expires_at` = 5 นาทีนับจากเวลาที่สร้าง"
+            ].join("\n"),
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CreateQrRequest" }
+                }
+              }
+            },
+            callbacks: {
+              onPaymentPaid: {
+                "{$request.body#/redirect_url}": {
+                  post: {
+                    summary: "Webhook Callback แจ้งผลการชำระเงินสำเร็จ (payment.paid)",
+                    description: "เมื่อระบบได้รับแจ้งเตือนเงินเข้าจาก KBank LINE Webhook ที่ตรงกับ `lookup_key` และยังไม่หมดอายุ ระบบจะเปลี่ยนสถานะเป็น `PAID` และส่ง HTTP POST มายัง `redirect_url` (Timeout 5 วินาที)",
+                    requestBody: {
+                      required: true,
+                      content: {
+                        "application/json": {
+                          schema: { $ref: "#/components/schemas/MerchantCallbackPayload" }
+                        }
+                      }
+                    },
+                    responses: {
+                      "200": {
+                        description: "เซิร์ฟเวอร์ร้านค้าตอบกลับ 2xx ระบบจะบันทึก `callback_sent = true` และ `callback_status_code`"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            responses: {
+              "201": {
+                description: "สร้างรายการชำระเงินและ PromptPay QR สำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 201 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/CreateQrData" }
+                      }
+                    }
+                  }
+                }
+              },
+              "400": {
+                description: "จำนวนเงินน้อยกว่า 1 หรือ `redirect_url` ไม่ใช่ URL ที่ถูกต้อง",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "401": {
+                description: "ไม่ได้ยืนยันตัวตน หรือไม่พบบัญชีธุรกิจที่เปิดใช้งาน",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "409": {
+                description: "ทศนิยมอ้างอิง (0.01 - 0.99) สำหรับยอด `base_amount` นี้ถูกใช้งานเต็มทั้ง 99 ช่องในขณะนั้น",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 409,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "No available decimal reference slot for this amount, please retry shortly"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/payments/orders/{id}": {
+          get: {
+            tags: ["Payments"],
+            summary: "ดูรายละเอียดและสถานะคำสั่งซื้อ (Payment Order)",
+            description: "ดึงข้อมูลคำสั่งซื้อตาม `order_id` (ผู้ใช้ Role `business` สามารถเข้าถึงได้เฉพาะคำสั่งซื้อของ `business_id` ตัวเองเท่านั้น ส่วน `admin` สามารถดูได้ทั้งหมด)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "id",
+                in: "path",
+                required: true,
+                description: "รหัสคำสั่งซื้อ (`order_id`) รูปแบบ `YYYYMMDDHHmmss_<total_amount>`",
+                schema: {
+                  type: "string",
+                  example: "20261020153045_100.01"
+                }
+              }
+            ],
+            responses: {
+              "200": {
+                description: "พบข้อมูลคำสั่งซื้อ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 200 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/PaymentOrderDetailData" }
+                      }
+                    }
+                  }
+                }
+              },
+              "401": {
+                description: "ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "404": {
+                description: "ไม่พบคำสั่งซื้อ หรือคำสั่งซื้อไม่ได้เป็นของธุรกิจผู้เรียก",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 404,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Payment order not found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/webhooks/kbank/line": {
+          post: {
+            tags: ["Webhooks"],
+            summary: "รับ Webhook ข้อความแจ้งเตือนเงินเข้าจาก KBank LINE",
+            description: [
+              "รับ Event จาก LINE Messaging API เพื่อแยกวิเคราะห์ข้อความเงินเข้าของธนาคารกสิกรไทย (KBank) และจับคู่กับคำสั่งซื้อที่สถานะ `UNVERIFIED`",
+              "",
+              "**การตรวจสอบความปลอดภัยและ Idempotency:**",
+              "- หากตั้งค่า `VERIFY_LINE_SIGNATURE=true` ระบบจะตรวจสอบ Header `x-line-signature` ด้วย HMAC-SHA256 (`LINE_CHANNEL_SECRET`) กับ `rawBody`",
+              "- ป้องกันข้อความซ้ำด้วย `webhook_logs.line_message_id`",
+              "- สกัดยอดเงินทศนิยม 2 ตำแหน่งและวันเวลาโอน (แปลงปี พ.ศ. เป็น ค.ศ. อัตโนมัติ) เพื่อค้นหา `lookup_key = YYYYMMDD_<amount>` ที่ยังไม่หมดอายุ (`expires_at >= transferTime`)"
+            ].join("\n"),
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "x-line-signature",
+                in: "header",
+                required: false,
+                description: "Base64 HMAC-SHA256 signature ของ raw request body (บังคับเมื่อ `VERIFY_LINE_SIGNATURE=true`)",
+                schema: {
+                  type: "string",
+                  example: "bW9ja19saW5lX2htYWNfc2hhMjU2X3NpZ25hdHVyZQ=="
+                }
+              }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/LineWebhookRequest" }
+                }
+              }
+            },
+            responses: {
+              "200": {
+                description: "ประมวลผล Webhook สำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 200 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/WebhookProcessedData" }
+                      }
+                    }
+                  }
+                }
+              },
+              "401": {
+                description: "ลายเซ็น `x-line-signature` ไม่ถูกต้อง (เมื่อเปิดใช้งาน `VERIFY_LINE_SIGNATURE=true`)",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 401,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Invalid LINE signature"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    let uiInstance = null;
+
+    function initSwagger(spec) {
+      uiInstance = SwaggerUIBundle({
+        spec: spec,
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIStandalonePreset
+        ],
+        layout: "BaseLayout",
+        docExpansion: "list",
+        defaultModelsExpandDepth: 1,
+        persistAuthorization: true,
+        filter: true,
+        tryItOutEnabled: true
+      });
+    }
+
+    function applyCustomServer() {
+      const input = document.getElementById("custom-server-url");
+      const rawUrl = (input.value || "").trim().replace(/\/+$/, "");
+      if (!rawUrl) return;
+
+      openApiSpec.servers = [
+        {
+          url: rawUrl,
+          description: "Custom Server URL"
+        }
+      ];
+      initSwagger(JSON.parse(JSON.stringify(openApiSpec)));
+    }
+
+    function downloadOpenApiJson() {
+      const blob = new Blob([JSON.stringify(openApiSpec, null, 2)], {
+        type: "application/json"
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "apay-openapi.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    window.addEventListener("DOMContentLoaded", function () {
+      initSwagger(openApiSpec);
+    });
+  </script>
+</body>
+</html>
