@@ -73,3 +73,25 @@ export function bangkokDateTimeToUtc(
 
   return new Date(iso);
 }
+
+/**
+ * บวกจำนวนเดือนโดยรักษาวันและเวลาเดิม (ใช้คำนวณวันครบรอบบิล)
+ * หากเดือนปลายทางมีจำนวนวันน้อยกว่า (เช่น 31 ม.ค. → ก.พ.) จะ Clamp
+ * เป็นวันสุดท้ายของเดือนปลายทาง (28/29/30) แทนการกระโดดข้ามเดือน
+ */
+export function addMonthsClamped(date: Date, months: number): Date {
+  const result = new Date(date.getTime());
+  const originalDay = result.getUTCDate();
+
+  // ตั้งเป็นวันที่ 1 ก่อนเพื่อป้องกันการ Rollover ระหว่างเปลี่ยนเดือน
+  result.setUTCDate(1);
+  result.setUTCMonth(result.getUTCMonth() + months);
+
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(result.getUTCFullYear(), result.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+
+  result.setUTCDate(Math.min(originalDay, lastDayOfTargetMonth));
+
+  return result;
+}

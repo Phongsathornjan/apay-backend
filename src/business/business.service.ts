@@ -18,13 +18,6 @@ export class BusinessService {
     return this.businessRepository.findOne({ where: { user_id: userId } });
   }
 
-  findByApiKeyPrefix(prefix: string): Promise<Business | null> {
-    return this.businessRepository.findOne({
-      where: { api_key_prefix: prefix },
-      relations: { user: { role: true } },
-    });
-  }
-
   findByLineDestination(destination: string): Promise<Business | null> {
     return this.businessRepository.findOne({
       where: { line_destination: destination },

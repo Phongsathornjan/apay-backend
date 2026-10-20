@@ -9,6 +9,11 @@ const TABLES = [
   'roles',
   'users',
   'businesses',
+  'packages',
+  'business_subscriptions',
+  'subscription_periods',
+  'api_keys',
+  'api_key_usage_logs',
   'payment_orders',
   'webhook_logs',
 ] as const;

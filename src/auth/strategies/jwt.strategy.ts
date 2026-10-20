@@ -9,6 +9,7 @@ interface JwtPayload {
   username?: string;
   role?: UserRole;
   business_id?: string | null;
+  api_key_id?: string | null;
   type?: string;
 }
 
@@ -28,6 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       username: payload.username ?? '',
       role: payload.role ?? 'business',
       businessId: payload.business_id ?? null,
+      apiKeyId: payload.api_key_id ?? null,
     };
   }
 }

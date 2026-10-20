@@ -1,15 +1,19 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_INTERCEPTOR } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { ApiKeysModule } from './api-keys/api-keys.module';
 import { AuthModule } from './auth/auth.module';
 import { BusinessModule } from './business/business.module';
 import { DatabaseModule } from './database/database.module';
 import { DB_SCHEMA } from './database/database.schema';
+import { PackagesModule } from './packages/packages.module';
 import { PaymentModule } from './payment/payment.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { UsersModule } from './users/users.module';
 import { WebhookModule } from './webhook/webhook.module';
 import { ResponseInterceptor } from './common/interceptor/response.interceptor';
@@ -20,6 +24,7 @@ import { LoggerInterceptor } from './common/interceptor/logger.interceptor';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
@@ -57,6 +62,9 @@ import { LoggerInterceptor } from './common/interceptor/logger.interceptor';
     AuthModule,
     UsersModule,
     BusinessModule,
+    PackagesModule,
+    SubscriptionsModule,
+    ApiKeysModule,
     PaymentModule,
     WebhookModule,
     DatabaseModule,

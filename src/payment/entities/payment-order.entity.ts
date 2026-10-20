@@ -8,6 +8,7 @@ import {
   PrimaryColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { ApiKey } from '../../api-keys/entities/api-key.entity';
 import { Business } from '../../business/entities/business.entity';
 import { numericTransformer } from '../../common/transformers/numeric.transformer';
 import { DB_SCHEMA } from '../../database/database.schema';
@@ -30,6 +31,13 @@ export class PaymentOrder {
   @ManyToOne(() => Business, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'business_id' })
   business: Business;
+
+  @Column({ type: 'uuid', name: 'api_key_id', nullable: true })
+  api_key_id: string | null;
+
+  @ManyToOne(() => ApiKey, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'api_key_id' })
+  api_key: ApiKey | null;
 
   @Column({
     type: 'numeric',

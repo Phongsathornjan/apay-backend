@@ -2,6 +2,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   MaxLength,
   MinLength,
@@ -32,4 +33,8 @@ export class RegisterBusinessDto {
   @IsString()
   @MaxLength(64)
   line_destination?: string;
+
+  @IsOptional()
+  @IsUUID()
+  package_id?: string;
 }

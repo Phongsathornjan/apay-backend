@@ -8,4 +8,9 @@ export interface AuthUser {
   username: string;
   role: UserRole;
   businessId: string | null;
+  /**
+   * มีค่าเมื่อ Token ถูกออกจากการแลก API Key (`POST /auth/token`)
+   * ใช้ผูก `payment_orders.api_key_id` และบันทึก `api_key_usage_logs`
+   */
+  apiKeyId?: string | null;
 }

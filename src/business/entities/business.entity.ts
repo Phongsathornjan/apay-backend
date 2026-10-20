@@ -29,11 +29,17 @@ export class Business {
   @Column({ type: 'varchar', length: 20, name: 'promptpay_id' })
   promptpay_id: string;
 
-  @Column({ type: 'varchar', length: 24, name: 'api_key_prefix', unique: true })
-  api_key_prefix: string;
+  @Column({
+    type: 'varchar',
+    length: 24,
+    name: 'api_key_prefix',
+    unique: true,
+    nullable: true,
+  })
+  api_key_prefix: string | null;
 
-  @Column({ type: 'varchar', length: 128, name: 'api_key_hash' })
-  api_key_hash: string;
+  @Column({ type: 'varchar', length: 128, name: 'api_key_hash', nullable: true })
+  api_key_hash: string | null;
 
   @Column({
     type: 'varchar',

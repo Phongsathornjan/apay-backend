@@ -7,12 +7,55 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
+import { Package } from '../packages/entities/package.entity';
 import { Role } from '../users/entities/role.entity';
 import { User } from '../users/entities/user.entity';
 
 const DEFAULT_ROLES: Array<{ name: string; description: string }> = [
   { name: 'admin', description: 'ผู้ดูแลระบบ (Administrator)' },
   { name: 'business', description: 'บัญชีร้านค้า (Merchant/Business)' },
+];
+
+const DEFAULT_PACKAGES: Array<{
+  code: string;
+  name: string;
+  description: string;
+  price: number;
+  max_api_keys: number;
+  quota_limit: number;
+  rate_limit_per_hour: number;
+  billing_cycle_months: number;
+}> = [
+  {
+    code: 'FREE',
+    name: 'Free',
+    description: 'แพ็กเกจทดลองใช้งานฟรี',
+    price: 0,
+    max_api_keys: 1,
+    quota_limit: 100,
+    rate_limit_per_hour: 60,
+    billing_cycle_months: 1,
+  },
+  {
+    code: 'STARTER',
+    name: 'Starter',
+    description: 'แพ็กเกจเริ่มต้นสำหรับร้านค้าขนาดเล็ก',
+    price: 499,
+    max_api_keys: 3,
+    quota_limit: 1000,
+    rate_limit_per_hour: 300,
+    billing_cycle_months: 1,
+  },
+  {
+    code: 'PRO',
+    name: 'Pro',
+    description: 'แพ็กเกจสำหรับร้านค้าที่มีปริมาณธุรกรรมสูง',
+    price: 1499,
+    max_api_keys: 10,
+    quota_limit: 5000,
+    rate_limit_per_hour: 1200,
+    billing_cycle_months: 1,
+  },
 ];
 
 const BCRYPT_ROUNDS = 10;
@@ -26,12 +69,15 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
     private readonly rolesRepository: Repository<Role>,
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
+    @InjectRepository(Package)
+    private readonly packagesRepository: Repository<Package>,
     private readonly configService: ConfigService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
     try {
       await this.seedRoles();
+      await this.seedDefaultPackages();
       await this.seedAdminUser();
     } catch (error) {
       this.logger.error(
@@ -51,6 +97,24 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
         await this.rolesRepository.save(this.rolesRepository.create(role));
         this.logger.log(`Seeded role "${role.name}"`);
       }
+    }
+  }
+
+  private async seedDefaultPackages(): Promise<void> {
+    for (const pkg of DEFAULT_PACKAGES) {
+      const existing = await this.packagesRepository.findOne({
+        where: { code: pkg.code },
+        withDeleted: true,
+      });
+
+      if (existing) {
+        continue;
+      }
+
+      await this.packagesRepository.save(
+        this.packagesRepository.create({ ...pkg, is_active: true }),
+      );
+      this.logger.log(`Seeded package "${pkg.code}"`);
     }
   }
 

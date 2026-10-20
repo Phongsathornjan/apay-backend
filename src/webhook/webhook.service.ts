@@ -6,8 +6,10 @@ import { AxiosError } from 'axios';
 import { createHmac } from 'node:crypto';
 import { firstValueFrom } from 'rxjs';
 import { DataSource, Repository } from 'typeorm';
+import { ApiKeyUsageLog } from '../api-keys/entities/api-key-usage-log.entity';
 import { safeCompare } from '../common/utils/crypto.util';
 import { PaymentOrder } from '../payment/entities/payment-order.entity';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { WebhookLog } from './entities/webhook-log.entity';
 import {
   LineWebhookBody,
@@ -41,6 +43,7 @@ export class WebhookService {
     private readonly dataSource: DataSource,
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   /**
@@ -161,6 +164,26 @@ export class WebhookService {
       order.status = 'PAID';
       order.paid_at = new Date();
       await manager.getRepository(PaymentOrder).save(order);
+
+      // ครบเงื่อนไข "สร้าง QR + จ่ายเงินสำเร็จ" → หักโควต้า 1 ครั้ง
+      const quotaDeducted = await this.subscriptionsService.deductQuotaOnPaid(
+        order,
+        manager,
+      );
+
+      if (order.api_key_id) {
+        const usageLogsRepository = manager.getRepository(ApiKeyUsageLog);
+
+        await usageLogsRepository.save(
+          usageLogsRepository.create({
+            api_key_id: order.api_key_id,
+            business_id: order.business_id,
+            payment_order_id: order.id,
+            action: 'QR_PAID',
+            quota_deducted: quotaDeducted,
+          }),
+        );
+      }
 
       await webhookLogsRepository.save(
         webhookLogsRepository.create({

@@ -204,6 +204,49 @@
   <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
   <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-standalone-preset.js"></script>
   <script>
+    const CORRELATION_ID_EXAMPLE = "550e8400-e29b-41d4-a716-446655440000";
+
+    const successEnvelope = (dataSchema, status = 200) => ({
+      description: "Successful response",
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            required: ["ok", "status", "correlation_id", "data"],
+            properties: {
+              ok: { type: "boolean", example: true },
+              status: { type: "integer", example: status },
+              correlation_id: {
+                type: "string",
+                format: "uuid",
+                example: CORRELATION_ID_EXAMPLE
+              },
+              data: dataSchema
+            }
+          }
+        }
+      }
+    });
+
+    const errorResponse = (description, message) => ({
+      description,
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+          ...(message
+            ? {
+                example: {
+                  ok: false,
+                  status: 400,
+                  correlation_id: CORRELATION_ID_EXAMPLE,
+                  message
+                }
+              }
+            : {})
+        }
+      }
+    });
+
     const openApiSpec = {
       openapi: "3.0.3",
       info: {
@@ -219,10 +262,12 @@
           "- **Correlation ID**: ทุก Request สามารถแนบ Header `x-correlation-id` มาได้ หากไม่แนบระบบจะสร้าง UUID ให้โดยอัตโนมัติ",
           "",
           "### ลำดับการใช้งานหลัก (Integration Flow)",
-          "1. **Admin** เข้าสู่ระบบผ่าน `POST /api/v1/auth/login` แล้วสร้างบัญชีร้านค้าผ่าน `POST /api/v1/auth/register-business` เพื่อรับ `api_key` (`apay_live_<8_hex>_<32_hex>`)",
-          "2. **Business / Merchant** นำ `api_key` มาแลกเป็น JWT (`access_token`, `refresh_token`) ที่ `POST /api/v1/auth/token` (หรือเข้าสู่ระบบด้วย username/password)",
-          "3. **สร้างรายการชำระเงิน PromptPay QR** ที่ `POST /api/v1/payments/qr` ระบบจะจองทศนิยมอ้างอิง (`0.01` - `0.99`) ให้โดยอัตโนมัติ มีอายุ **5 นาที**",
-          "4. เมื่อลูกค้าโอนเงินและ LINE KBank แจ้งเตือนมายัง `POST /api/v1/webhooks/kbank/line` ระบบจะจับคู่ยอด (`lookup_key = YYYYMMDD_<total_amount>`) เปลี่ยนสถานะเป็น `PAID` และยิง Webhook Callback (`event: 'payment.paid'`) ไปยัง `redirect_url` ของออเดอร์นั้นทันที"
+          "1. **Admin** เข้าสู่ระบบผ่าน `POST /api/v1/auth/login` แล้วสร้างบัญชีร้านค้าผ่าน `POST /api/v1/auth/register-business` (ขั้นตอนนี้ยังไม่ออก API Key)",
+          "2. **Admin** ผูก Master Package ให้ร้านค้าผ่าน `POST /api/v1/subscriptions` (เริ่มรอบบิล Prepaid + รีเซ็ตโควต้า)",
+          "3. **Admin หรือ Business** สร้าง API Key ผ่าน `POST /api/v1/api-keys` (ได้ Raw Key `apay_live_<8_hex>_<32_hex>` เพียงครั้งเดียว และจำกัดจำนวนตาม `max_api_keys`)",
+          "4. **Business / Merchant** นำ `api_key` มาแลกเป็น JWT (`access_token`, `refresh_token`) ที่ `POST /api/v1/auth/token` (Token จะแนบ `api_key_id`) หรือเข้าสู่ระบบด้วย username/password",
+          "5. **สร้างรายการชำระเงิน PromptPay QR** ที่ `POST /api/v1/payments/qr` ระบบตรวจโควต้า/Rate Limit, จองทศนิยมอ้างอิง (`0.01` - `0.99`) ให้อัตโนมัติ มีอายุ **5 นาที** และบันทึก `QR_CREATED`",
+          "6. เมื่อลูกค้าโอนเงินและ LINE KBank แจ้งเตือนมายัง `POST /api/v1/webhooks/kbank/line` ระบบจะจับคู่ยอด (`lookup_key = YYYYMMDD_<total_amount>`) เปลี่ยนสถานะเป็น `PAID`, หักโควต้า 1 ครั้ง, บันทึก `QR_PAID` และยิง Webhook Callback (`event: 'payment.paid'`) ไปยัง `redirect_url` ของออเดอร์นั้นทันที"
         ].join("\n")
       },
       servers: [
@@ -243,6 +288,18 @@
         {
           name: "Payments",
           description: "สร้าง PromptPay QR Payment Order และตรวจสอบสถานะคำสั่งซื้อ"
+        },
+        {
+          name: "Packages",
+          description: "จัดการ Master Package (แพ็กเกจหลัก) ที่กำหนดโควต้า, จำนวน API Key และ Rate Limit ต่อชั่วโมง"
+        },
+        {
+          name: "Subscriptions",
+          description: "ผูก/เปลี่ยนแพ็กเกจให้ Business แบบ Prepaid (Paid-through), ต่ออายุรอบบิล, ตรวจสอบโควต้าและ Usage"
+        },
+        {
+          name: "ApiKeys",
+          description: "สร้าง/เปิด-ปิด/เพิกถอน API Key หลายรายการต่อ Business และดู Usage Tracking ราย Key"
         },
         {
           name: "Webhooks",
@@ -437,6 +494,13 @@
                 nullable: true,
                 example: "U1234567890abcdef1234567890abcdef",
                 description: "(Optional) LINE Bot Destination User ID"
+              },
+              package_id: {
+                type: "string",
+                format: "uuid",
+                nullable: true,
+                example: "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                description: "(Optional) ผูก Master Package ให้ Business ทันทีหลังสร้างบัญชี"
               }
             }
           },
@@ -448,8 +512,7 @@
               "role",
               "business_id",
               "business_name",
-              "promptpay_id",
-              "api_key"
+              "promptpay_id"
             ],
             properties: {
               user_id: {
@@ -478,11 +541,6 @@
               promptpay_id: {
                 type: "string",
                 example: "0812345678"
-              },
-              api_key: {
-                type: "string",
-                example: "apay_live_1a2b3c4d_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c",
-                description: "แสดงเพียงครั้งเดียวตอนลงทะเบียน! โปรดเก็บรักษาไว้เป็นความลับ"
               }
             }
           },
@@ -537,7 +595,8 @@
               "qr_image",
               "status",
               "redirect_url",
-              "expires_at"
+              "expires_at",
+              "api_key_id"
             ],
             properties: {
               order_id: {
@@ -589,6 +648,13 @@
                 format: "date-time",
                 example: "2026-10-20T08:35:45.000Z",
                 description: "วันเวลาหมดอายุของ QR (5 นาทีนับจากเวลาที่สร้าง)"
+              },
+              api_key_id: {
+                type: "string",
+                format: "uuid",
+                nullable: true,
+                example: "d4e5f6a7-b8c9-0123-def0-234567890123",
+                description: "API Key ที่ใช้สร้างคำสั่งซื้อ (`null` เมื่อสร้างด้วย JWT จาก username/password)"
               }
             }
           },
@@ -808,6 +874,736 @@
                 example: "2026-10-20T08:31:12.000Z"
               }
             }
+          },
+          Package: {
+            type: "object",
+            required: [
+              "id",
+              "code",
+              "name",
+              "price",
+              "max_api_keys",
+              "quota_limit",
+              "rate_limit_per_hour",
+              "billing_cycle_months",
+              "is_active",
+              "created_at",
+              "updated_at"
+            ],
+            properties: {
+              id: {
+                type: "string",
+                format: "uuid",
+                example: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+              },
+              code: {
+                type: "string",
+                example: "STARTER"
+              },
+              name: {
+                type: "string",
+                example: "Starter"
+              },
+              description: {
+                type: "string",
+                nullable: true,
+                example: "แพ็กเกจเริ่มต้นสำหรับร้านค้าขนาดเล็ก"
+              },
+              price: {
+                type: "number",
+                example: 499
+              },
+              max_api_keys: {
+                type: "integer",
+                example: 3
+              },
+              quota_limit: {
+                type: "integer",
+                example: 1000
+              },
+              rate_limit_per_hour: {
+                type: "integer",
+                example: 300
+              },
+              billing_cycle_months: {
+                type: "integer",
+                example: 1
+              },
+              is_active: {
+                type: "boolean",
+                example: true
+              },
+              deleted_at: {
+                type: "string",
+                format: "date-time",
+                nullable: true,
+                example: null
+              },
+              created_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:00.000Z"
+              },
+              updated_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:00.000Z"
+              }
+            }
+          },
+          CreatePackageRequest: {
+            type: "object",
+            required: [
+              "code",
+              "name",
+              "price",
+              "max_api_keys",
+              "quota_limit",
+              "rate_limit_per_hour"
+            ],
+            properties: {
+              code: {
+                type: "string",
+                maxLength: 50,
+                example: "STARTER"
+              },
+              name: {
+                type: "string",
+                maxLength: 150,
+                example: "Starter"
+              },
+              description: {
+                type: "string",
+                nullable: true,
+                example: "แพ็กเกจเริ่มต้น"
+              },
+              price: {
+                type: "number",
+                minimum: 0,
+                example: 499
+              },
+              max_api_keys: {
+                type: "integer",
+                minimum: 1,
+                example: 3
+              },
+              quota_limit: {
+                type: "integer",
+                minimum: 1,
+                example: 1000
+              },
+              rate_limit_per_hour: {
+                type: "integer",
+                minimum: 1,
+                example: 300
+              },
+              billing_cycle_months: {
+                type: "integer",
+                minimum: 1,
+                default: 1,
+                example: 1
+              },
+              is_active: {
+                type: "boolean",
+                default: true,
+                example: true
+              }
+            }
+          },
+          UpdatePackageRequest: {
+            type: "object",
+            properties: {
+              code: {
+                type: "string",
+                maxLength: 50,
+                example: "STARTER"
+              },
+              name: {
+                type: "string",
+                maxLength: 150,
+                example: "Starter Plus"
+              },
+              description: {
+                type: "string",
+                nullable: true,
+                example: "อัปเดตรายละเอียดแพ็กเกจ"
+              },
+              price: {
+                type: "number",
+                minimum: 0,
+                example: 599
+              },
+              max_api_keys: {
+                type: "integer",
+                minimum: 1,
+                example: 5
+              },
+              quota_limit: {
+                type: "integer",
+                minimum: 1,
+                example: 2000
+              },
+              rate_limit_per_hour: {
+                type: "integer",
+                minimum: 1,
+                example: 500
+              },
+              billing_cycle_months: {
+                type: "integer",
+                minimum: 1,
+                example: 1
+              },
+              is_active: {
+                type: "boolean",
+                example: true
+              }
+            }
+          },
+          DeletePackageData: {
+            type: "object",
+            required: ["id", "deleted"],
+            properties: {
+              id: {
+                type: "string",
+                format: "uuid",
+                example: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+              },
+              deleted: {
+                type: "boolean",
+                example: true
+              }
+            }
+          },
+          SubscriptionSummary: {
+            type: "object",
+            required: [
+              "id",
+              "business_id",
+              "package_id",
+              "status",
+              "quota_limit",
+              "quota_used",
+              "quota_remaining",
+              "rate_limit_per_hour",
+              "max_api_keys",
+              "current_period_start",
+              "current_period_end",
+              "last_payment_at",
+              "created_at",
+              "updated_at"
+            ],
+            properties: {
+              id: {
+                type: "string",
+                format: "uuid",
+                example: "e5f6a7b8-c9d0-1234-ef01-345678901234"
+              },
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              package_id: {
+                type: "string",
+                format: "uuid",
+                example: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+              },
+              status: {
+                type: "string",
+                enum: ["ACTIVE", "PAST_DUE", "CANCELLED"],
+                example: "ACTIVE",
+                description: "`PAST_DUE` = เลยวันจ่ายถึงแล้วยังไม่ชำระเงิน (ไม่มี grace period และโควต้าเป็น 0)"
+              },
+              quota_limit: {
+                type: "integer",
+                example: 1000
+              },
+              quota_used: {
+                type: "integer",
+                example: 120
+              },
+              quota_remaining: {
+                type: "integer",
+                example: 880
+              },
+              rate_limit_per_hour: {
+                type: "integer",
+                example: 300
+              },
+              max_api_keys: {
+                type: "integer",
+                example: 3
+              },
+              current_period_start: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:00.000Z"
+              },
+              current_period_end: {
+                type: "string",
+                format: "date-time",
+                example: "2026-11-20T08:00:00.000Z",
+                description: "วันที่ชำระเงินล่วงหน้าถึง (paid-through)"
+              },
+              last_payment_at: {
+                type: "string",
+                format: "date-time",
+                nullable: true,
+                example: "2026-10-20T08:00:00.000Z"
+              },
+              cancelled_at: {
+                type: "string",
+                format: "date-time",
+                nullable: true,
+                example: null
+              },
+              created_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:00.000Z"
+              },
+              updated_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:00.000Z"
+              }
+            }
+          },
+          SubscriptionPeriod: {
+            type: "object",
+            required: [
+              "id",
+              "subscription_id",
+              "business_id",
+              "package_id",
+              "period_start",
+              "period_end",
+              "quota_limit",
+              "quota_used",
+              "created_at"
+            ],
+            properties: {
+              id: {
+                type: "string",
+                format: "uuid",
+                example: "f6a7b8c9-d0e1-2345-f012-456789012345"
+              },
+              subscription_id: {
+                type: "string",
+                format: "uuid",
+                example: "e5f6a7b8-c9d0-1234-ef01-345678901234"
+              },
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              package_id: {
+                type: "string",
+                format: "uuid",
+                example: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+              },
+              period_start: {
+                type: "string",
+                format: "date-time",
+                example: "2026-09-20T08:00:00.000Z"
+              },
+              period_end: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:00.000Z"
+              },
+              quota_limit: {
+                type: "integer",
+                example: 1000
+              },
+              quota_used: {
+                type: "integer",
+                example: 120
+              },
+              created_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:01.000Z"
+              }
+            }
+          },
+          AssignSubscriptionRequest: {
+            type: "object",
+            required: ["business_id", "package_id"],
+            properties: {
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              package_id: {
+                type: "string",
+                format: "uuid",
+                example: "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                description: "เริ่มรอบบิลใหม่และรีเซ็ตโควต้าตามแพ็กเกจนี้ทันที"
+              }
+            }
+          },
+          RenewSubscriptionRequest: {
+            type: "object",
+            properties: {
+              package_id: {
+                type: "string",
+                format: "uuid",
+                nullable: true,
+                example: "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                description: "(Optional) เปลี่ยนแพ็กเกจพร้อมต่ออายุ; หากไม่ระบุจะใช้แพ็กเกจเดิม"
+              }
+            }
+          },
+          BusinessSubscriptionDetailsData: {
+            type: "object",
+            required: ["business_id", "subscription", "api_keys", "periods"],
+            properties: {
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              subscription: {
+                allOf: [{ $ref: "#/components/schemas/SubscriptionSummary" }],
+                nullable: true
+              },
+              api_keys: {
+                type: "object",
+                required: ["used", "max"],
+                properties: {
+                  used: {
+                    type: "integer",
+                    example: 2,
+                    description: "จำนวน API Key ที่ยังไม่ถูกลบ"
+                  },
+                  max: {
+                    type: "integer",
+                    example: 3
+                  }
+                }
+              },
+              periods: {
+                type: "array",
+                items: { $ref: "#/components/schemas/SubscriptionPeriod" }
+              }
+            }
+          },
+          BusinessUsageData: {
+            type: "object",
+            required: [
+              "business_id",
+              "subscription",
+              "current_hour_requests",
+              "keys_breakdown"
+            ],
+            properties: {
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              subscription: {
+                allOf: [{ $ref: "#/components/schemas/SubscriptionSummary" }],
+                nullable: true
+              },
+              current_hour_requests: {
+                type: "integer",
+                example: 7,
+                description: "จำนวน QR ที่สร้างใน 60 นาทีล่าสุด (ใช้เทียบ rate_limit_per_hour)"
+              },
+              keys_breakdown: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "api_key_id",
+                    "name",
+                    "key_prefix",
+                    "is_active",
+                    "deleted_at",
+                    "qr_created_count",
+                    "qr_paid_count",
+                    "quota_deducted_count",
+                    "last_used_at"
+                  ],
+                  properties: {
+                    api_key_id: {
+                      type: "string",
+                      format: "uuid",
+                      example: "d4e5f6a7-b8c9-0123-def0-234567890123"
+                    },
+                    name: {
+                      type: "string",
+                      example: "POS Terminal"
+                    },
+                    key_prefix: {
+                      type: "string",
+                      example: "apay_live_1a2b3c4d"
+                    },
+                    is_active: {
+                      type: "boolean",
+                      example: true
+                    },
+                    deleted_at: {
+                      type: "string",
+                      format: "date-time",
+                      nullable: true,
+                      example: null
+                    },
+                    qr_created_count: {
+                      type: "integer",
+                      example: 42
+                    },
+                    qr_paid_count: {
+                      type: "integer",
+                      example: 40
+                    },
+                    quota_deducted_count: {
+                      type: "integer",
+                      example: 40
+                    },
+                    last_used_at: {
+                      type: "string",
+                      format: "date-time",
+                      nullable: true,
+                      example: "2026-10-20T08:31:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          ApiKeySummary: {
+            type: "object",
+            required: [
+              "id",
+              "business_id",
+              "name",
+              "key_prefix",
+              "is_active",
+              "last_used_at",
+              "deleted_at",
+              "created_at",
+              "updated_at"
+            ],
+            properties: {
+              id: {
+                type: "string",
+                format: "uuid",
+                example: "d4e5f6a7-b8c9-0123-def0-234567890123"
+              },
+              business_id: {
+                type: "string",
+                format: "uuid",
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+              },
+              name: {
+                type: "string",
+                example: "POS Terminal"
+              },
+              key_prefix: {
+                type: "string",
+                example: "apay_live_1a2b3c4d"
+              },
+              is_active: {
+                type: "boolean",
+                example: true
+              },
+              last_used_at: {
+                type: "string",
+                format: "date-time",
+                nullable: true,
+                example: "2026-10-20T08:31:00.000Z"
+              },
+              deleted_at: {
+                type: "string",
+                format: "date-time",
+                nullable: true,
+                example: null
+              },
+              created_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:00.000Z"
+              },
+              updated_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-20T08:00:00.000Z"
+              }
+            }
+          },
+          CreateApiKeyRequest: {
+            type: "object",
+            required: ["name"],
+            properties: {
+              business_id: {
+                type: "string",
+                format: "uuid",
+                nullable: true,
+                example: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+                description: "บังคับเฉพาะเมื่อผู้เรียกเป็น `admin` (business จะใช้ `businessId` จาก Token)"
+              },
+              name: {
+                type: "string",
+                maxLength: 100,
+                example: "POS Terminal"
+              },
+              package_id: {
+                type: "string",
+                format: "uuid",
+                nullable: true,
+                example: "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                description: "(Optional, admin only) ผูก/เปลี่ยนแพ็กเกจก่อนสร้าง Key"
+              }
+            }
+          },
+          CreateApiKeyData: {
+            allOf: [
+              { $ref: "#/components/schemas/ApiKeySummary" },
+              {
+                type: "object",
+                required: ["api_key"],
+                properties: {
+                  api_key: {
+                    type: "string",
+                    example:
+                      "apay_live_1a2b3c4d_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c",
+                    description: "แสดงเพียงครั้งเดียวตอนสร้าง! โปรดเก็บรักษาไว้เป็นความลับ"
+                  }
+                }
+              }
+            ]
+          },
+          UpdateApiKeyRequest: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+                maxLength: 100,
+                example: "POS Terminal (Branch 2)"
+              },
+              is_active: {
+                type: "boolean",
+                example: false,
+                description: "ตั้งเป็น `false` เพื่อยกเลิก Refresh Token เดิมของ Key นี้ทันที"
+              }
+            }
+          },
+          RevokeApiKeyData: {
+            type: "object",
+            required: ["id", "revoked"],
+            properties: {
+              id: {
+                type: "string",
+                format: "uuid",
+                example: "d4e5f6a7-b8c9-0123-def0-234567890123"
+              },
+              revoked: {
+                type: "boolean",
+                example: true
+              }
+            }
+          },
+          ApiKeyUsageData: {
+            type: "object",
+            required: [
+              "api_key_id",
+              "name",
+              "key_prefix",
+              "is_active",
+              "deleted_at",
+              "last_used_at",
+              "total_qr_created",
+              "total_qr_paid_and_deducted",
+              "current_hour_requests",
+              "recent_logs"
+            ],
+            properties: {
+              api_key_id: {
+                type: "string",
+                format: "uuid",
+                example: "d4e5f6a7-b8c9-0123-def0-234567890123"
+              },
+              name: {
+                type: "string",
+                example: "POS Terminal"
+              },
+              key_prefix: {
+                type: "string",
+                example: "apay_live_1a2b3c4d"
+              },
+              is_active: {
+                type: "boolean",
+                example: true
+              },
+              deleted_at: {
+                type: "string",
+                format: "date-time",
+                nullable: true,
+                example: null
+              },
+              last_used_at: {
+                type: "string",
+                format: "date-time",
+                nullable: true,
+                example: "2026-10-20T08:31:00.000Z"
+              },
+              total_qr_created: {
+                type: "integer",
+                example: 42
+              },
+              total_qr_paid_and_deducted: {
+                type: "integer",
+                example: 40
+              },
+              current_hour_requests: {
+                type: "integer",
+                example: 7
+              },
+              recent_logs: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "id",
+                    "action",
+                    "payment_order_id",
+                    "quota_deducted",
+                    "created_at"
+                  ],
+                  properties: {
+                    id: {
+                      type: "string",
+                      format: "uuid",
+                      example: "a7b8c9d0-e1f2-3456-0123-567890123456"
+                    },
+                    action: {
+                      type: "string",
+                      enum: ["QR_CREATED", "QR_PAID"],
+                      example: "QR_PAID"
+                    },
+                    payment_order_id: {
+                      type: "string",
+                      nullable: true,
+                      example: "20261020153045_100.01"
+                    },
+                    quota_deducted: {
+                      type: "boolean",
+                      example: true
+                    },
+                    created_at: {
+                      type: "string",
+                      format: "date-time",
+                      example: "2026-10-20T08:31:12.000Z"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -912,7 +1708,7 @@
           post: {
             tags: ["Auth"],
             summary: "ลงทะเบียนบัญชีธุรกิจใหม่ (เฉพาะ Admin)",
-            description: "สร้าง `User` (`role = business`) และ `Business` ภายใต้ Database Transaction เดียวกัน พร้อมสร้าง `api_key` (`apay_live_<8_hex>_<32_hex>`) ซึ่งจะส่งคืนใน Response เพียงครั้งเดียวเท่านั้น",
+            description: "สร้าง `User` (`role = business`) และ `Business` ภายใต้ Database Transaction เดียวกัน โดย **ยังไม่ออก API Key** ในขั้นตอนนี้ (ต้องสร้างภายหลังผ่าน `/api/v1/api-keys` เมื่อผูกแพ็กเกจแล้ว) สามารถระบุ `package_id` เพื่อผูกแพ็กเกจเริ่มต้นได้ทันที",
             security: [{ BearerAuth: [] }],
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" }
@@ -927,7 +1723,7 @@
             },
             responses: {
               "201": {
-                description: "สร้างบัญชีธุรกิจและ API Key สำเร็จ",
+                description: "สร้างบัญชีธุรกิจสำเร็จ (ยังไม่มี API Key)",
                 content: {
                   "application/json": {
                     schema: {
@@ -984,7 +1780,7 @@
           post: {
             tags: ["Auth"],
             summary: "แลกเปลี่ยน API Key เป็น JWT Token Bundle",
-            description: "รับ `api_key` จาก Request Body (`api_key`) หรือจาก Header (`x-api-key`) เพื่อตรวจสอบและออก `access_token` และ `refresh_token` สำหรับร้านค้า",
+            description: "รับ `api_key` จาก Request Body (`api_key`) หรือจาก Header (`x-api-key`) เพื่อตรวจสอบกับตาราง `api_keys` (ต้อง `is_active = true` และไม่ถูก Soft Delete) แล้วออก `access_token` และ `refresh_token` ที่แนบ `api_key_id` มาด้วย",
             security: [{ ApiKeyHeader: [] }, {}],
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" },
@@ -1050,7 +1846,7 @@
           post: {
             tags: ["Auth"],
             summary: "ต่ออายุ JWT ด้วย Refresh Token (Token Rotation)",
-            description: "ตรวจสอบ `refresh_token` กับค่า SHA-256 Hash ล่าสุดในฐานข้อมูล แล้วออก `access_token` และ `refresh_token` ชุดใหม่ (Refresh Token เดิมจะถูกแทนที่ทันที)",
+            description: "ตรวจสอบ `refresh_token` กับค่า SHA-256 Hash ล่าสุด (`api_keys.refresh_token_hash` เมื่อ Token มี `api_key_id` หรือ `users`/`businesses` สำหรับ Token เดิม) แล้วออก `access_token` และ `refresh_token` ชุดใหม่ (Refresh Token เดิมจะถูกแทนที่ทันที)",
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" }
             ],
@@ -1109,10 +1905,13 @@
               "สร้างคำสั่งซื้อและสร้าง PromptPay QR Code สำหรับร้านค้าของ Token ที่เรียกใช้งาน (รองรับ Role `business` และ `admin` ที่ผูกกับธุรกิจ)",
               "",
               "**รายละเอียดการทำงาน:**",
+              "- ต้องมี Subscription สถานะ `ACTIVE` และยังไม่เลย `current_period_end` (paid-through) มิฉะนั้นจะถูกปฏิเสธ `403`",
+              "- ตรวจสอบ `quota_remaining > 0` และ Rate Limit ต่อชั่วโมงของ Business (นับจาก `api_key_usage_logs.action = 'QR_CREATED'` ใน 60 นาทีล่าสุด) — เกินจะถูกปฏิเสธ `429`",
               "- ปรับสถานะออเดอร์ `UNVERIFIED` ที่หมดอายุแล้ว (`expires_at <= now`) ให้เป็น `EXPIRED` โดยอัตโนมัติ",
               "- ปัดเศษ `amount` ลงเป็นจำนวนเต็ม (`base_amount`) และจองค่า `decimal_ref` ที่ว่างอยู่ตั้งแต่ `0.01` ถึง `0.99`",
               "- คำนวณ `total_amount = base_amount + decimal_ref` และสร้าง PromptPay EMVCo Payload พร้อมรูป Base64 PNG Data URL (`qr_image`)",
-              "- กำหนดเวลาหมดอายุ `expires_at` = 5 นาทีนับจากเวลาที่สร้าง"
+              "- กำหนดเวลาหมดอายุ `expires_at` = 5 นาทีนับจากเวลาที่สร้าง",
+              "- หาก Token มี `api_key_id` จะผูก `payment_orders.api_key_id` และบันทึก Usage Log `QR_CREATED` (ยังไม่หักโควต้า)"
             ].join("\n"),
             security: [{ BearerAuth: [] }],
             parameters: [
@@ -1184,6 +1983,34 @@
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "403": {
+                description: "Subscription ไม่ได้อยู่ในสถานะ ACTIVE (PAST_DUE / ไม่มีแพ็กเกจ / ถูกยกเลิก) หรือ API Key ถูกปิดใช้งาน",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 403,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Business package is inactive or unpaid"
+                    }
+                  }
+                }
+              },
+              "429": {
+                description: "โควต้าเดือนนี้หมด (`quota_remaining = 0`) หรือสร้าง QR เกิน `rate_limit_per_hour` ใน 60 นาทีล่าสุด",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 429,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Hourly rate limit exceeded for this business"
+                    }
                   }
                 }
               },
@@ -1270,6 +2097,491 @@
             }
           }
         },
+        "/api/v1/packages": {
+          get: {
+            tags: ["Packages"],
+            summary: "ดูรายการ Master Package ทั้งหมด",
+            description:
+              "คืนรายการแพ็กเกจที่ยังไม่ถูก Soft Delete — `admin` เห็นได้ทุกแพ็กเกจ (กรองด้วย `only_active`) ส่วน `business` จะถูกบังคับให้เห็นเฉพาะแพ็กเกจที่ `is_active = true`",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "only_active",
+                in: "query",
+                required: false,
+                description: "admin เท่านั้น (business ถูกบังคับเป็น true เสมอ)",
+                schema: {
+                  type: "string",
+                  enum: ["true", "false"],
+                  example: "true"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                type: "array",
+                items: { $ref: "#/components/schemas/Package" }
+              }),
+              "401": errorResponse(
+                "ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง",
+                "Unauthorized"
+              ),
+              "403": errorResponse("ไม่มีสิทธิ์เข้าถึง (Role ไม่ถูกต้อง)", "Insufficient role permissions")
+            }
+          },
+          post: {
+            tags: ["Packages"],
+            summary: "สร้าง Master Package (เฉพาะ Admin)",
+            description:
+              "สร้างแพ็กเกจหลักที่กำหนด `max_api_keys`, `quota_limit`, `rate_limit_per_hour` และ `billing_cycle_months` (ค่าเริ่มต้น 1 เดือน)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/CreatePackageRequest"
+                  }
+                }
+              }
+            },
+            responses: {
+              "201": successEnvelope(
+                { $ref: "#/components/schemas/Package" },
+                201
+              ),
+              "400": errorResponse("ข้อมูลที่ส่งมาไม่ถูกต้อง (Validation Error)"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("ต้องเป็น Role `admin` เท่านั้น", "Insufficient role permissions"),
+              "409": errorResponse("รหัสแพ็กเกจ (`code`) ซ้ำกับที่มีอยู่", "Package code already exists")
+            }
+          }
+        },
+        "/api/v1/packages/{id}": {
+          get: {
+            tags: ["Packages"],
+            summary: "ดูรายละเอียด Master Package",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "id",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/Package"
+              }),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบแพ็กเกจ", "Package not found")
+            }
+          },
+          patch: {
+            tags: ["Packages"],
+            summary: "แก้ไข Master Package (เฉพาะ Admin)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "id",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+                }
+              }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/UpdatePackageRequest"
+                  }
+                }
+              }
+            },
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/Package"
+              }),
+              "400": errorResponse("ข้อมูลที่ส่งมาไม่ถูกต้อง (Validation Error)"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("ต้องเป็น Role `admin` เท่านั้น", "Insufficient role permissions"),
+              "404": errorResponse("ไม่พบแพ็กเกจ", "Package not found"),
+              "409": errorResponse("รหัสแพ็กเกจ (`code`) ซ้ำกับที่มีอยู่", "Package code already exists")
+            }
+          },
+          delete: {
+            tags: ["Packages"],
+            summary: "ลบ Master Package แบบ Soft Delete (เฉพาะ Admin)",
+            description:
+              "จะปฏิเสธด้วย `409 Conflict` หากยังมี Subscription สถานะ `ACTIVE` หรือ `PAST_DUE` ผูกกับแพ็กเกจนี้อยู่",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "id",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/DeletePackageData"
+              }),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("ต้องเป็น Role `admin` เท่านั้น", "Insufficient role permissions"),
+              "404": errorResponse("ไม่พบแพ็กเกจ", "Package not found"),
+              "409": errorResponse(
+                "ยังมี Subscription ที่ ACTIVE หรือ PAST_DUE ผูกกับแพ็กเกจนี้",
+                "Cannot delete package with active or past-due subscriptions"
+              )
+            }
+          }
+        },
+        "/api/v1/subscriptions": {
+          post: {
+            tags: ["Subscriptions"],
+            summary: "ผูกหรือเปลี่ยน Package ให้ Business (เฉพาะ Admin)",
+            description:
+              "เริ่มรอบบิลใหม่ทันทีและ **รีเซ็ตโควต้า** ตามแพ็กเกจใหม่ (`quota_used = 0`, `quota_remaining = quota_limit`) พร้อมบันทึก `last_payment_at` — ไม่มีการเติมโควต้าแยก",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/AssignSubscriptionRequest"
+                  }
+                }
+              }
+            },
+            responses: {
+              "201": successEnvelope(
+                { $ref: "#/components/schemas/SubscriptionSummary" },
+                201
+              ),
+              "400": errorResponse("Business ถูกปิดใช้งาน หรือแพ็กเกจไม่พร้อมใช้งาน", "Package is not available"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("ต้องเป็น Role `admin` เท่านั้น", "Insufficient role permissions"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found")
+            }
+          }
+        },
+        "/api/v1/subscriptions/{id}/renew": {
+          post: {
+            tags: ["Subscriptions"],
+            summary: "ต่ออายุรอบบิล Subscription (เฉพาะ Admin)",
+            description:
+              "รีเซ็ตโควต้า, ตั้ง `status = 'ACTIVE'` และ `last_payment_at = now` — หากต่ออายุก่อนครบกำหนด รอบใหม่จะเริ่มจาก `current_period_end` เดิม (รักษาวันจ่ายถึง) ไม่ใช่ `now`",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "id",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "e5f6a7b8-c9d0-1234-ef01-345678901234"
+                }
+              }
+            ],
+            requestBody: {
+              required: false,
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/RenewSubscriptionRequest"
+                  }
+                }
+              }
+            },
+            responses: {
+              "201": successEnvelope(
+                { $ref: "#/components/schemas/SubscriptionSummary" },
+                201
+              ),
+              "400": errorResponse("Subscription ถูกยกเลิก หรือแพ็กเกจใหม่ไม่พร้อมใช้งาน"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("ต้องเป็น Role `admin` เท่านั้น", "Insufficient role permissions"),
+              "404": errorResponse("ไม่พบ Subscription", "Subscription not found")
+            }
+          }
+        },
+        "/api/v1/subscriptions/business/{businessId}": {
+          get: {
+            tags: ["Subscriptions"],
+            summary: "ดู Subscription, โควต้า และประวัติรอบบิลของ Business",
+            description:
+              "คืนสถานะแพ็กเกจ, โควต้าคงเหลือ, `current_period_end` (paid-through), `last_payment_at`, จำนวน API Key ที่ใช้/สูงสุด และประวัติ `subscription_periods` — business ดูได้เฉพาะของตัวเอง",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "businessId",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/BusinessSubscriptionDetailsData"
+              }),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบข้อมูล Subscription ของธุรกิจนี้", "Business subscription not found")
+            }
+          }
+        },
+        "/api/v1/subscriptions/business/{businessId}/usage": {
+          get: {
+            tags: ["Subscriptions"],
+            summary: "สรุปการใช้งานรอบปัจจุบันของ Business",
+            description:
+              "คืนข้อมูล Subscription ปัจจุบัน, จำนวน Request ใน 1 ชั่วโมงล่าสุด และยอดการใช้งานแยกตาม API Key",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "businessId",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/BusinessUsageData"
+              }),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบข้อมูลของธุรกิจนี้", "Business subscription not found")
+            }
+          }
+        },
+        "/api/v1/api-keys": {
+          get: {
+            tags: ["ApiKeys"],
+            summary: "ดูรายการ API Key ของ Business",
+            description:
+              "ไม่คืน `key_hash` หรือ `refresh_token_hash` — business เห็นเฉพาะ Key ของตัวเอง ส่วน admin ระบุ `business_id` เพื่อกรองได้",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "business_id",
+                in: "query",
+                required: false,
+                description: "admin เท่านั้น",
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                type: "array",
+                items: { $ref: "#/components/schemas/ApiKeySummary" }
+              }),
+              "400": errorResponse("ไม่พบบัญชีธุรกิจของผู้เรียก", "Business account not found"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง")
+            }
+          },
+          post: {
+            tags: ["ApiKeys"],
+            summary: "สร้าง API Key ใหม่",
+            description:
+              "ต้องมี Subscription `ACTIVE` ที่ยังไม่เลย `current_period_end` และจำนวน Key ที่ยังไม่ถูกลบต้องต่ำกว่า `max_api_keys` — Response จะแสดง Raw `api_key` เพียงครั้งเดียว",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/CreateApiKeyRequest"
+                  }
+                }
+              }
+            },
+            responses: {
+              "201": successEnvelope(
+                { $ref: "#/components/schemas/CreateApiKeyData" },
+                201
+              ),
+              "400": errorResponse(
+                "ไม่มี Subscription ที่ชำระเงินอยู่ หรือ admin ไม่ได้ระบุ business_id",
+                "Business has no active prepaid package subscription"
+              ),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found"),
+              "409": errorResponse(
+                "จำนวน API Key ถึงเพดานของแพ็กเกจแล้ว",
+                "Maximum API keys limit reached for current package"
+              )
+            }
+          }
+        },
+        "/api/v1/api-keys/usage/business/{businessId}": {
+          get: {
+            tags: ["ApiKeys"],
+            summary: "สรุป Usage ระดับ Business",
+            description:
+              "เหมือน `/api/v1/subscriptions/business/{businessId}/usage` แต่เข้าถึงผ่าน API Key module",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "businessId",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/BusinessUsageData"
+              }),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบข้อมูลของธุรกิจนี้", "API key not found")
+            }
+          }
+        },
+        "/api/v1/api-keys/{id}/usage": {
+          get: {
+            tags: ["ApiKeys"],
+            summary: "ดู Usage ของ API Key รายตัว",
+            description:
+              "คืนยอด `total_qr_created`, `total_qr_paid_and_deducted`, จำนวน Request ในชั่วโมงล่าสุด และ `recent_logs` 20 รายการล่าสุด — เรียกดู Key ที่ถูก Soft Delete ได้",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "id",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "d4e5f6a7-b8c9-0123-def0-234567890123"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/ApiKeyUsageData"
+              }),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบ API Key หรือไม่ได้เป็นของธุรกิจผู้เรียก", "API key not found")
+            }
+          }
+        },
+        "/api/v1/api-keys/{id}": {
+          patch: {
+            tags: ["ApiKeys"],
+            summary: "แก้ไขชื่อหรือเปิด/ปิด API Key",
+            description:
+              "การตั้ง `is_active = false` จะล้าง `refresh_token_hash` ของ Key นั้นทันที (Refresh Token เดิมใช้ไม่ได้อีก)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "id",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "d4e5f6a7-b8c9-0123-def0-234567890123"
+                }
+              }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/UpdateApiKeyRequest"
+                  }
+                }
+              }
+            },
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/ApiKeySummary"
+              }),
+              "400": errorResponse("ข้อมูลที่ส่งมาไม่ถูกต้อง (Validation Error)"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบ API Key หรือไม่ได้เป็นของธุรกิจผู้เรียก", "API key not found")
+            }
+          },
+          delete: {
+            tags: ["ApiKeys"],
+            summary: "เพิกถอน API Key แบบ Soft Delete",
+            description:
+              "ตั้ง `is_active = false`, ล้าง `refresh_token_hash` และ Soft Delete เพื่อคืน Slot `max_api_keys` โดยยังคงประวัติการใช้งานไว้",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              {
+                name: "id",
+                in: "path",
+                required: true,
+                schema: {
+                  type: "string",
+                  format: "uuid",
+                  example: "d4e5f6a7-b8c9-0123-def0-234567890123"
+                }
+              }
+            ],
+            responses: {
+              "200": successEnvelope({
+                $ref: "#/components/schemas/RevokeApiKeyData"
+              }),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบ API Key หรือไม่ได้เป็นของธุรกิจผู้เรียก", "API key not found")
+            }
+          }
+        },
         "/api/v1/webhooks/kbank/line": {
           post: {
             tags: ["Webhooks"],
@@ -1280,7 +2592,8 @@
               "**การตรวจสอบความปลอดภัยและ Idempotency:**",
               "- หากตั้งค่า `VERIFY_LINE_SIGNATURE=true` ระบบจะตรวจสอบ Header `x-line-signature` ด้วย HMAC-SHA256 (`LINE_CHANNEL_SECRET`) กับ `rawBody`",
               "- ป้องกันข้อความซ้ำด้วย `webhook_logs.line_message_id`",
-              "- สกัดยอดเงินทศนิยม 2 ตำแหน่งและวันเวลาโอน (แปลงปี พ.ศ. เป็น ค.ศ. อัตโนมัติ) เพื่อค้นหา `lookup_key = YYYYMMDD_<amount>` ที่ยังไม่หมดอายุ (`expires_at >= transferTime`)"
+              "- สกัดยอดเงินทศนิยม 2 ตำแหน่งและวันเวลาโอน (แปลงปี พ.ศ. เป็น ค.ศ. อัตโนมัติ) เพื่อค้นหา `lookup_key = YYYYMMDD_<amount>` ที่ยังไม่หมดอายุ (`expires_at >= transferTime`)",
+              "- เมื่อจับคู่สำเร็จจะเปลี่ยนสถานะเป็น `PAID` และ **หักโควต้าของ Business 1 ครั้ง** ภายใน Transaction เดียวกัน (เฉพาะเมื่อ Subscription ยัง `ACTIVE` และมี `quota_remaining > 0`) พร้อมบันทึก `api_key_usage_logs` (`QR_PAID`) หาก Order มี `api_key_id`"
             ].join("\n"),
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" },

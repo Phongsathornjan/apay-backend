@@ -51,7 +51,12 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
   3. Use `numericTransformer` (`src/common/transformers/numeric.transformer.ts`) on `@Column({ type: 'numeric', ... })` fields so PostgreSQL `numeric` values map to JS `number` instead of `string`.
 - **Auto-Synchronize & Seeding**:
   - TypeORM `synchronize` is controlled by `ENV === 'development'` (checks `ENV`, **not** `NODE_ENV`). Before synchronizing, `AppModule` runs `CREATE SCHEMA IF NOT EXISTS "apay"`.
-  - On bootstrap, `DatabaseSeederService` seeds default roles (`admin`, `business`) and upserts the admin user if `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
+  - On bootstrap, `DatabaseSeederService` seeds default roles (`admin`, `business`), default master packages (`FREE`, `STARTER`, `PRO` — idempotent by `code`) and upserts the admin user if `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
+- **Tables in `TABLES` (`src/database/database-security.service.ts`)**: `roles`, `users`, `businesses`, `packages`, `business_subscriptions`, `subscription_periods`, `api_keys`, `api_key_usage_logs`, `payment_orders`, `webhook_logs`.
+- **Schema Notes**:
+  - `businesses.api_key_prefix` / `businesses.api_key_hash` are **nullable legacy columns**; new API keys live in `api_keys` (multiple keys per business).
+  - `payment_orders.api_key_id` is nullable and references `api_keys` with `onDelete: 'SET NULL'`.
+  - `packages` and `business_subscriptions` use `@DeleteDateColumn` (`deleted_at`) for soft delete. `api_key_usage_logs` keeps history even after an API key is soft-deleted.
 
 ## Core Business Logic
 
@@ -59,14 +64,47 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 - **Roles**: `admin` and `business`. Protected routes use `@UseGuards(JwtAuthGuard, RoleGuard)` and `@Roles(...)`.
 - **Endpoints (`/api/v1/auth`)**:
   - `POST /login`: Authenticates `admin` or `business` user with username/password; verifies business `is_active` for `business` role.
-  - `POST /register-business` (`admin` only): Transactionally creates a `User` (`role = business`) and `Business`, returning the raw API key once.
-  - `POST /token`: Exchanges a business API key (from body `api_key` or `x-api-key` header) for an access/refresh JWT bundle.
-  - `POST /refresh`: Rotates access & refresh tokens; verifies SHA-256 hash against `users.refresh_token_hash` or `businesses.refresh_token_hash`.
-- **API Key Format**: `apay_live_<8_hex>_<32_hex>` (`src/auth/utils/api-key.util.ts`). Only `api_key_prefix` (`apay_live_<8_hex>`) and SHA-256 `api_key_hash` are stored in `businesses`. Hash comparisons use timing-safe `safeCompare`.
+  - `POST /register-business` (`admin` only): Transactionally creates **only** a `User` (`role = business`) and `Business` (no API key at registration). Optional `package_id` immediately assigns a Master Package. Returns `{ user_id, username, role, business_id, business_name, promptpay_id }`.
+  - `POST /token`: Exchanges a business API key (from body `api_key` or `x-api-key` header) for an access/refresh JWT bundle. Looks up `api_keys` by `key_prefix` with `is_active = true` and not soft-deleted, verifies `business.is_active` and `user.is_active`, then compares `sha256(apiKey)` via timing-safe `safeCompare` against `api_keys.key_hash`.
+  - `POST /refresh`: Rotates access & refresh tokens. If the refresh token payload has `api_key_id`, the key must still be active/not deleted and `api_keys.refresh_token_hash` must match (rotated on every refresh). Otherwise falls back to `users.refresh_token_hash` / `businesses.refresh_token_hash`.
+- **JWT Payload**: `sub`, `username`, `role`, `business_id`, `api_key_id` (`null` for username/password logins). `JwtStrategy` maps `api_key_id` to `req.user.apiKeyId`.
+- **API Key Format**: `apay_live_<8_hex>_<32_hex>` (`src/auth/utils/api-key.util.ts`). Only `key_prefix` (`apay_live_<8_hex>`) and SHA-256 `key_hash` are stored in `api_keys`. Hash comparisons use timing-safe `safeCompare`.
 
-### 2. Payment Orders & PromptPay QR (`src/payment/`)
+### 2. Master Packages (`src/packages/`)
+- **Endpoints (`/api/v1/packages`)**: `POST /` (admin), `GET /` (admin/business; business users are forced to `only_active = true`), `GET /:id`, `PATCH /:id` (admin), `DELETE /:id` (admin, soft delete).
+- **Fields**: `code`, `name`, `description`, `price` (`numeric` + `numericTransformer`), `max_api_keys`, `quota_limit`, `rate_limit_per_hour`, `billing_cycle_months` (default `1`), `is_active`, `deleted_at`.
+- `PackagesService.create` rejects duplicated `code` with `409 Conflict` (checks soft-deleted rows too). `softDelete` refuses (`409`) while any `business_subscriptions` with `package_id = id` and `status IN ('ACTIVE','PAST_DUE')` still exists; otherwise sets `is_active = false` and soft-removes the row.
+
+### 3. Business Subscriptions — Prepaid / Paid-through (`src/subscriptions/`)
+- **Model**: 1 Business → 1 active Master Package. `quota_limit`, `quota_used`, `quota_remaining` form a **single pool per business** shared across all API keys. **No top-up** exists.
+- **`current_period_end` = paid-through date** (the date the business has paid up to), not merely a reset date.
+- **Endpoints (`/api/v1/subscriptions`)**:
+  - `POST /` (`admin`): Assign or change package (`{ business_id, package_id }`). Starts a new billing period immediately and **resets the quota**.
+  - `POST /:id/renew` (`admin`): Renews the period (`{ package_id? }`). Resets quota, sets `status = 'ACTIVE'` and `last_payment_at = now`. If renewed early (`current_period_end > now`), the new period starts at the existing `current_period_end` so the paid-through date is preserved; otherwise it starts at `now`.
+  - `GET /business/:businessId` (`admin`, `business`): Returns current subscription (status, quota, `current_period_end`, `last_payment_at`), API key slot usage (`used`/`max`), and `subscription_periods` history. Business users can only read their own `business_id` (otherwise `404`).
+  - `GET /business/:businessId/usage` (`admin`, `business`): Returns current-period summary, requests in the last hour, and per-API-key breakdown (`qr_created_count`, `qr_paid_count`, `quota_deducted_count`, `last_used_at`, including soft-deleted keys).
+- **`SubscriptionsService` internals**:
+  - `applyPackageToSubscription()` — maps package values (`quota_limit`, `rate_limit_per_hour`, `max_api_keys`, `billing_cycle_months`), resets `quota_used = 0` / `quota_remaining = quota_limit`, sets `status = 'ACTIVE'`, `current_period_start`, `current_period_end = addMonthsClamped(start, billing_cycle_months)`, `last_payment_at = now`. Snapshots the previous period when `quota_used > 0`. **Only this function resets quotas.**
+  - `expireIfPastDue()` — lazy expiry: when `status = 'ACTIVE'` and `now >= current_period_end`, snapshots the period, sets `status = 'PAST_DUE'` and `quota_remaining = 0` (keeps `quota_used`). **No auto-renew, no grace period, no quota reset.**
+  - `renewSubscription()` — admin renewal described above.
+  - `assertQuotaAndRateLimit(businessId, manager?)` — used before creating a QR. Throws `403 ForbiddenException('Business package is inactive or unpaid')` when there is no subscription or status is not `ACTIVE`; throws `429` when `quota_remaining <= 0`; counts `api_key_usage_logs` with `action = 'QR_CREATED'` in the last 60 minutes and throws `429` when `>= rate_limit_per_hour`.
+  - `deductQuotaOnPaid(order, manager)` — inside the webhook transaction, locks the subscription row with `pessimistic_write`, applies lazy expiry, and (if still `ACTIVE` with `quota_remaining > 0`) decrements `quota_remaining` / increments `quota_used`, returning `true`. Otherwise returns `false` without failing the payment transaction.
+- **Hourly Cron**: `@Cron(CronExpression.EVERY_HOUR)` sweeps `status = 'ACTIVE'` subscriptions with `current_period_end <= now` and calls `expireIfPastDue()` per row (try/catch + `Logger.warn` so one failure does not stop the batch). The cron **revokes access** (sets `PAST_DUE`); it never resets quota.
+- **Date helper**: `addMonthsClamped(date, months)` (`src/common/utils/datetime.util.ts`) preserves day/time and clamps end-of-month (e.g. 31 Jan → 28/29 Feb, 31 Mar → 30 Apr).
+
+### 4. API Key Management & Usage Tracking (`src/api-keys/`)
+- **Endpoints (`/api/v1/api-keys`)**:
+  - `POST /` (`admin`, `business`): Creates a key. Business users are forced to their own `businessId`; admin must send `business_id` and may send `package_id` to assign/change the package first. Requires an `ACTIVE` subscription not past `current_period_end` (else `400`), and the count of non-deleted keys must be below `max_api_keys` (else `409`). Returns the raw `api_key` **once**.
+  - `GET /` (`admin`, `business`): Lists keys (never returns `key_hash` / `refresh_token_hash`). Business users only see their own; admin may filter with `?business_id=`.
+  - `PATCH /:id`: Updates `name` and/or `is_active`. Setting `is_active = false` clears `refresh_token_hash` immediately.
+  - `DELETE /:id`: Sets `is_active = false`, clears `refresh_token_hash`, then soft-deletes the key (frees a `max_api_keys` slot while keeping usage logs attached).
+  - `GET /:id/usage`: Per-key totals (`total_qr_created`, `total_qr_paid_and_deducted`, `current_hour_requests`) and `recent_logs` (latest 20). Works for soft-deleted keys (`withDeleted`).
+  - `GET /usage/business/:businessId`: Business-level usage (delegates to `SubscriptionsService.getBusinessUsage`).
+- **Ownership**: `business` callers can only access their own `business_id`; cross-business access responds `404` to avoid leaking existence. `admin` can manage all businesses.
+
+### 5. Payment Orders & PromptPay QR (`src/payment/`)
 - **Endpoints (`/api/v1/payments`)**:
-  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order.
+  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. Requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). If the JWT contains `api_key_id`, the key must still be active/not deleted, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
   - `GET /orders/:id` (JWT): Returns order details (`business` users can only access their own `business_id`).
 - **Order Allocation Logic (`PaymentService`)**:
   - Lazily marks any `UNVERIFIED` orders with `expires_at <= now` as `EXPIRED` before allocating.
@@ -77,17 +115,19 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
     - `order.lookup_key`: `YYYYMMDD_<total_amount.toFixed(2)>`
   - Generates EMVCo PromptPay payload via `promptpay-qr` using `business.promptpay_id` and `total_amount`, plus a Base64 PNG Data URL via `qrcode`.
 
-### 3. KBank LINE Webhook & Matching (`src/webhook/`)
+### 6. KBank LINE Webhook & Matching (`src/webhook/`)
 - **Endpoint**: `POST /api/v1/webhooks/kbank/line`
 - **Signature Verification**: Checks `x-line-signature` (HMAC-SHA256 of `request.rawBody` with `LINE_CHANNEL_SECRET`) only when `VERIFY_LINE_SIGNATURE=true`.
 - **Idempotency**: Ignores non-text events and deduplicates by checking `webhook_logs.line_message_id`.
 - **KBank Text Parser (`src/webhook/utils/kbank-message.parser.ts`)**:
   - Extracts 2-decimal transfer amount from Thai KBank LINE notifications (keywords: `จำนวนเงิน`, `จำนวน`, `เงินเข้า`, `รับโอนเงิน`, `รับโอน`, `รับเงิน`, `โอนเข้า`).
   - Parses `DD/MM/YY(YY)` and `HH:mm` in `Asia/Bangkok` time, converting 2-digit or 4-digit Thai Buddhist Era (พ.ศ.) years to CE (`convertBuddhistYearToCE`), falling back to the LINE event timestamp if no date is in the text.
-- **Order Matching & Callback (`WebhookService`)**:
+- **Order Matching, Quota Deduction & Callback (`WebhookService`)**:
   - Builds `lookupKey = "${parsed.dateStr}_${parsed.amount}"` and queries `payment_orders` inside a transaction with `pessimistic_write` lock where `lookup_key = :lookupKey`, `status = 'UNVERIFIED'`, and `expires_at >= :transferTime` (ordered by `created_at DESC`).
   - Logs result in `webhook_logs` with `process_status` (`MATCHED` or `NO_MATCH`).
-  - On match, marks order `PAID` (`paid_at = now`) and sends an HTTP `POST` callback (`event: 'payment.paid'`, 5s timeout) to `order.redirect_url`, recording `callback_sent` and `callback_status_code` on the order.
+  - On match, marks order `PAID` (`paid_at = now`) and calls `subscriptions.deductQuotaOnPaid()` in the same transaction (quota is deducted only when **QR created + payment succeeded** and the subscription is still `ACTIVE` with remaining quota).
+  - If `order.api_key_id` is set, writes `api_key_usage_logs` (`action = 'QR_PAID'`, `quota_deducted` = result of the deduction). Orders created without an API key still deduct quota but skip the log.
+  - Sends an HTTP `POST` callback (`event: 'payment.paid'`, 5s timeout) to `order.redirect_url`, recording `callback_sent` and `callback_status_code` on the order.
 
 ## Required Environment Variables
 
