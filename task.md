@@ -1,4 +1,4 @@
-# Plan: API Key Management, Master Package & Business Subscription System
+# Plan: Dashboard Module (Usage Analytics & Chart APIs)
 
 **Generated**: 2026-10-20
 **Estimated Complexity**: High
@@ -8,556 +8,1068 @@
 
 ## Overview
 
-พัฒนาระบบจัดการ **Master Package (`packages`)**, **Business Subscription (`business_subscriptions`, `subscription_periods`)**, และ **API Key Management & Usage Tracking (`api_keys`, `api_key_usage_logs`)** โดยรองรับเงื่อนไขทางธุรกิจดังนี้:
+สร้าง `DashboardModule` สำหรับให้ Frontend เรียกข้อมูลไป plot กราฟและ KPI Card เกี่ยวกับการใช้งานระบบ โดยแยกเป็น 2 ระดับ:
 
-1. **1 Business → 1 Active Subscription (ผูกกับ 1 Master Package)**:
-   - แพ็กเกจเป็นตัวกำหนด `max_api_keys` (จำนวน API Key สูงสุดที่สร้างได้), `quota_limit` (โควต้าต่อรอบเดือน), `rate_limit_per_hour` (จำกัดการสร้าง QR ต่อชั่วโมงรวมทั้ง Business), และ `billing_cycle_months` (ค่าเริ่มต้น `1` เดือน)
-   - โควต้า (`quota_limit`, `quota_used`, `quota_remaining`) เป็น Pool เดียวระดับ Business ที่แชร์ร่วมกันทุก API Key ของร้านค้านั้น
-   - **ไม่สามารถเติมโควต้าเพิ่ม (No Top-up)** มีเฉพาะการเปลี่ยน Package (ซึ่งจะรีเซ็ตโควต้าและเริ่มรอบบิลใหม่ทันที) หรือรอรีเซ็ตอัตโนมัติทุกเดือนตามวันครบรอบ (`current_period_end`) ของ Business นั้น
-2. **รอบบิลแบบ Prepaid / Paid-through + การหมดอายุ (Lazy Expiry + Cron)**:
-   - `current_period_end` คือ **"วันที่ชำระเงินล่วงหน้าถึง" (paid-through)** ไม่ใช่แค่วันรีเซ็ต — ระบบจะ **ไม่รีเซ็ตโควต้าให้เอง** เมื่อครบรอบ เพราะยังไม่มีการชำระเงินรอบใหม่
-   - ตรวจสอบแบบ Lazy ทุกครั้งที่มีการใช้งาน (`expireIfPastDue`): ถ้า `status = 'ACTIVE'` และ `now >= current_period_end`
-     - บันทึก Snapshot รอบที่จบลง `subscription_periods`
-     - เปลี่ยน `status = 'PAST_DUE'` และ `quota_remaining = 0` (คง `quota_used` ไว้เพื่อรายงาน) → สร้าง QR ไม่ได้ทันที
-     - **ไม่มี grace period** (ไม่มีการผ่อนผันหลังครบกำหนด)
-   - การได้โควต้าใหม่ (reset) เกิดได้จาก 2 ทางเท่านั้น:
-     - Admin ต่ออายุ (`POST /api/v1/subscriptions/:id/renew`) → สร้างรอบบิลใหม่ + `quota_used = 0`, `quota_remaining = quota_limit`
-     - Admin เปลี่ยน Package (`POST /api/v1/subscriptions`) → เริ่มรอบบิลใหม่ + reset โควต้าตาม Package ใหม่
-   - มี `@Cron(CronExpression.EVERY_HOUR)` จาก `@nestjs/schedule` คอยกวาด Subscription ที่ `current_period_end <= now` เพื่อเปลี่ยนเป็น `PAST_DUE` แม้ไม่มี Request เข้ามา (ทำหน้าที่ "ตัดสิทธิ์" ไม่ใช่ "รีเซ็ตโควต้า")
-3. **1 Business มีได้หลาย API Key (สูงสุดไม่เกิน `max_api_keys` ของแพ็กเกจ)**:
-   - ตอนเรียก `POST /api/v1/auth/register-business` จะสร้างเฉพาะ `User` และ `Business` (ยังไม่สร้าง API Key ในขั้นตอนนี้)
-   - Admin หรือ Business สามารถสร้าง API Key ภายหลังได้ โดยระบบจะตรวจสอบว่า Business มี Subscription ที่ `status = 'ACTIVE'` และยังไม่เลยวันจ่ายถึง (`current_period_end`) และจำนวน Key ที่ยังไม่ถูกลบ (`deleted_at IS NULL`) ยังไม่เกิน `max_api_keys`
-   - รองรับการเปิด/ปิด (`is_active: true/false`) และการลบแบบ Soft Delete (`deleted_at`) เพื่อเก็บประวัติการใช้งานย้อนหลัง
-4. **การนับ Quota และ Rate Limit**:
-   - **ตอนสร้าง QR (`POST /api/v1/payments/qr`)**: ตรวจสอบว่า Subscription ยัง `ACTIVE` และยังไม่เลย `current_period_end` (ถ้า `PAST_DUE` → `403`), `quota_remaining > 0` (ไม่พอ → `429`), และจำนวนการสร้าง QR (`action = 'QR_CREATED'`) ของ Business ในรอบ 60 นาทีล่าสุดยังไม่เกิน `rate_limit_per_hour` (เกิน → `429`) จากนั้นผูก `api_key_id` ลงใน `payment_orders` และบันทึก `api_key_usage_logs` (`action = 'QR_CREATED'`, `quota_deducted = false`)
-   - **ตอนชำระเงินสำเร็จ (`POST /api/v1/webhooks/kbank/line`)**: เมื่อจับคู่รายการ `UNVERIFIED` และเปลี่ยนเป็น `PAID` สำเร็จ (ครบเงื่อนไข **สร้าง QR + จ่ายเงินสำเร็จ**) จึงหัก `quota_remaining` ลง 1, เพิ่ม `quota_used` ขึ้น 1 และบันทึก `api_key_usage_logs` (`action = 'QR_PAID'`, `quota_deducted = true`)
-5. **Private Functions สำหรับจัดการโควต้าจาก Package (ไม่มีการ "เติมโควต้า")**:
-   - `applyPackageToSubscription()` — Map ค่าจาก `Package` ลง `BusinessSubscription` และเริ่มรอบบิลใหม่ (reset โควต้า) ใช้ทั้งตอนผูก/เปลี่ยนแพ็กเกจ และตอนต่ออายุ
-   - `expireIfPastDue()` — ตรวจจับวันจ่ายถึงแล้วยังไม่ชำระ → `PAST_DUE` + โควต้า 0 (ไม่รีเซ็ตให้ฟรี)
-   - `renewSubscription()` — ต่ออายุรอบบิล (Private/Admin endpoint) รักษาวันหมดอายุเดิมเมื่อต่ออายุก่อนกำหนด
+1. **Business Dashboard** — Business ดูข้อมูลของตัวเอง (หรือ Admin ระบุ `business_id`)
+   - Quota / Package usage
+   - QR Created / QR Paid / Success Rate / GMV
+   - การใช้งานแยกตาม API Key
+   - Rate Limit ต่อชั่วโมง
+   - Webhook ที่ match กับออเดอร์ของร้าน
+   - Quota burn-down รายวัน + ประวัติรอบบิล
+2. **Admin Dashboard** — Admin ดูภาพรวมทั้ง Platform
+   - จำนวน Business / Subscription แยกสถานะ
+   - Package distribution
+   - Platform GMV / QR Created / Paid
+   - Top businesses
+   - ตาราง Business พร้อม Usage / Quota / Subscription
+   - Business ที่ใกล้หมดอายุหรือใกล้หมดโควต้า
+   - Estimated MRR / ARR (ประมาณจากราคาแพ็กเกจปัจจุบัน)
+
+Dashboard Module นี้เป็น **Read-only Analytics API** ไม่มีตารางใหม่ ไม่มี write flow และไม่แตะ Business Logic เดิม ยกเว้นการเพิ่ม Index เพื่อรองรับ query ของ Dashboard
 
 ---
 
-## Prerequisites & Project Conventions (สำคัญมากสำหรับ AI Agent)
+## Assumptions & Scope
 
-- **Schema Rule**: ทุก Entity ต้องกำหนด `@Entity({ schema: DB_SCHEMA, name: '<table_name>' })` โดย import `DB_SCHEMA` จาก `src/database/database.schema.ts`
-- **Database Security Rule**: ทุกตารางใหม่ **ต้อง** นำชื่อไปเพิ่มในตัวแปร `TABLES` ในไฟล์ `src/database/database-security.service.ts` เพื่อให้เปิด Row Level Security (RLS) และถอนสิทธิ์ `anon`/`authenticated` อัตโนมัติตอน Bootstrap
-- **Numeric Transformer**: คอลัมน์ประเภท `numeric` (เช่น `price`) ต้องใช้ `transformer: numericTransformer` จาก `src/common/transformers/numeric.transformer.ts`
-- **Response Envelope**: ห้ามห่อ `{ ok: true, data }` เองใน Controller เพราะมี `ResponseInterceptor` จัดการให้อัตโนมัติแล้ว
-- **Mandatory Documentation Rule**: เมื่อแก้ไขโค้ดเสร็จ **ต้อง** อัปเดตทั้ง `AGENTS.md`, `api-docs.html` และเพิ่ม/อัปเดต Unit Test (`*.spec.ts`) ในงานเดียวกันเสมอ
-- **Mandatory Testing Rule (จาก `AGENTS.md`)**:
-  - ทุกการ implement/แก้ไขโค้ดใน `src/` ต้องมี unit test คู่กันในไฟล์ `*.spec.ts` ที่วางไว้ข้างไฟล์ที่ทดสอบ (colocated) และต้องรัน `pnpm test` ผ่านก่อนส่งงาน
-  - Unit test ต้อง mock dependency ภายนอกเสมอ — **ห้าม** ต่อ DB จริง, เรียก HTTP จริง หรือพึ่ง env var จริง (งานที่ต้องใช้ของจริงให้เขียนเป็น e2e test)
-  - ใช้ `Test.createTestingModule` จาก `@nestjs/testing`; mock เวลา (`jest.useFakeTimers()`) เมื่อ logic เกี่ยวกับเวลา/TTL; หลีกเลี่ยง assert ค่าที่ไม่ deterministic
-  - Jest ของโปรเจกต์รันผ่าน `node --experimental-vm-modules node_modules/jest/bin/jest.js` เพราะ NestJS v12 เป็น ESM-only — **ห้ามถอด flag นี้ออกจาก script `pnpm test`**
+- Backend คืนข้อมูลเป็น JSON ที่พร้อมนำไป plot (series + summary + breakdown) — ไม่ทำงาน Frontend/Chart Library
+- Timezone หลักคือ `Asia/Bangkok` (`UTC+7`) ทุก bucket ต้องตรงกับเวลาไทย
+- Default range = 30 วันล่าสุด, สูงสุด 365 วัน
+- `interval` รองรับ `hour` และ `day`
+  - `hour` ใช้ได้เฉพาะ range ≤ 31 วัน
+- Endpoint ทั้งหมดถูกห่อด้วย `ResponseInterceptor` อัตโนมัติ (ห้ามห่อ `{ ok, data }` เอง)
+- Business role เข้าถึงได้เฉพาะ `businessId` ของตัวเอง
+- Admin เข้าถึงได้ทุก Business และมี Endpoint สำหรับ Platform-wide
+- Metrics ทั้งหมดคำนวณจากตารางที่มีอยู่แล้ว:
+  - `payment_orders`
+  - `api_key_usage_logs`
+  - `api_keys`
+  - `business_subscriptions`
+  - `subscription_periods`
+  - `packages`
+  - `businesses`
+  - `webhook_logs`
+- ไม่มี Dependency ใหม่ (ไม่ต้องติดตั้ง chart library ฝั่ง Backend)
+
+## Non-Goals (ไม่อยู่ใน MVP นี้)
+
+- กราฟ 429 / 403 / Throttling เนื่องจากยังไม่มี request log ของ request ที่ถูกปฏิเสธ
+- Revenue จาก Invoice จริง / MRR แบบบัญชี — ยังไม่มีตาราง invoice
+- Churn rate / Subscription status history — ยังไม่มี event log ของการเปลี่ยนสถานะ
+- Callback latency / retry count — ยังไม่เก็บ latency
+- Pre-aggregation / Materialized View / Redis cache (ดูในหัวข้อ Future Work)
+- Frontend implementation
 
 ---
 
-## Sprint 1: Dependencies, Database Entities & Security Hardening
+## Metric Definitions (ใช้ร่วมกันทุก Task)
 
-**Goal**: ติดตั้ง Dependency สำหรับ Cron, สร้าง Entity ใหม่ทั้งหมดใน Schema `apay`, ปรับปรุง Entity เดิม และลงทะเบียนตารางใน `DatabaseSecurityService`
+> ทุกค่าต้องถูก cast เป็น `number` (PostgreSQL `SUM(numeric)` อาจคืนเป็น string)
+
+| Metric | สูตร |
+|---|---|
+| `usage.qr_created` | `COUNT(api_key_usage_logs.action = 'QR_CREATED')` |
+| `usage.qr_paid` | `COUNT(api_key_usage_logs.action = 'QR_PAID')` |
+| `usage.quota_deducted` | `COUNT(api_key_usage_logs.action = 'QR_PAID' AND quota_deducted = true)` |
+| `transactions.orders_created` | `COUNT(payment_orders.created_at in range)` |
+| `transactions.paid_count` | `COUNT(payment_orders.status = 'PAID' AND paid_at in range)` |
+| `transactions.expired_count` | `COUNT(payment_orders.created_at in range AND (status = 'EXPIRED' OR (status = 'UNVERIFIED' AND expires_at <= now)))` |
+| `transactions.active_unverified_count` | `COUNT(status = 'UNVERIFIED' AND expires_at > now)` |
+| `transactions.gmv` | `SUM(payment_orders.total_amount WHERE status = 'PAID' AND paid_at in range)` |
+| `transactions.average_order_value` | `gmv / paid_count` (ถ้า `paid_count = 0` ให้ 0) |
+| `transactions.paid_rate` | `paid_count / (paid_count + expired_count)` (ถ้า denominator = 0 ให้ 0) |
+| `rate_limit.requests_last_hour` | `COUNT(api_key_usage_logs.action = 'QR_CREATED' AND created_at >= now - 1 hour)` |
+| `rate_limit.utilization` | `requests_last_hour / rate_limit_per_hour` (clamp 0..1) |
+| `webhook.matched` | `COUNT(webhook_logs.process_status = 'MATCHED')` |
+| `webhook.no_match` | `COUNT(webhook_logs.process_status = 'NO_MATCH')` (Admin only — ดู Gotchas) |
+| `webhook.match_rate` | `matched / (matched + no_match)` (ถ้า denominator = 0 ให้ 0) |
+| `quota_utilization` | `quota_used / quota_limit` (ถ้า `quota_limit = 0` ให้ 0) |
+| `estimated_mrr` | `SUM(packages.price WHERE business_subscriptions.status = 'ACTIVE')` |
+| `estimated_arr` | `estimated_mrr * 12` |
+| `days_until_period_end` | `ceil((current_period_end - now) / 86400000)` clamp ขั้นต่ำ 0 |
+
+### Bucket rule
+
+- Day bucket เริ่ม `00:00` เวลาไทย
+- Hour bucket เริ่มต้นทุกต้นชั่วโมงเวลาไทย
+- SQL ที่แนะนำ:
+
+```sql
+date_trunc(
+  'day', -- หรือ 'hour'
+  created_at AT TIME ZONE 'Asia/Bangkok'
+) AT TIME ZONE 'Asia/Bangkok' AS bucket_start
+```
+
+- Range เป็นแบบ half-open `[from, to)` เพื่อไม่ให้นับ bucket สุดท้ายซ้ำ
+- ต้อง **zero-fill** bucket ที่ไม่มีข้อมูลเสมอ เพื่อให้กราฟต่อเนื่อง
+- Response ต้องมีทั้ง:
+  - `bucket_start`: ISO string (UTC)
+  - `label`: label เวลาไทย เช่น `20 Oct` หรือ `14:00`
+
+---
+
+## API Surface
+
+### Business-scoped (Role `business` ใช้ของตัวเอง, `admin` ต้องส่ง `business_id`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/dashboard/overview` | KPI cards + subscription summary |
+| `GET` | `/api/v1/dashboard/usage/timeseries` | QR Created / Paid / Quota Deducted ตามเวลา |
+| `GET` | `/api/v1/dashboard/transactions/timeseries` | Orders / Paid / Expired / GMV / AOV |
+| `GET` | `/api/v1/dashboard/rate-limit` | Usage 60 นาทีล่าสุด + series 24 ชั่วโมง |
+| `GET` | `/api/v1/dashboard/api-keys` | Breakdown การใช้งานราย Key |
+| `GET` | `/api/v1/dashboard/api-keys/timeseries` | Stacked series การใช้งานราย Key |
+| `GET` | `/api/v1/dashboard/subscription` | Quota trend + ประวัติรอบบิล |
+
+### Admin-only (Role `admin`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/dashboard/admin/overview` | Platform KPI |
+| `GET` | `/api/v1/dashboard/admin/timeseries` | New businesses / Orders / Paid / GMV |
+| `GET` | `/api/v1/dashboard/admin/distribution` | Package / Subscription status / Quota utilization |
+| `GET` | `/api/v1/dashboard/admin/businesses` | ตาราง Business + filters + pagination |
+| `GET` | `/api/v1/dashboard/admin/expiring` | ใกล้หมดอายุ / ใกล้หมดโควต้า |
+
+---
+
+## Prerequisites
+
+- โมดูล `Packages`, `Subscriptions`, `ApiKeys`, `Payment`, `Webhook` ถูก implement แล้ว
+- ทำตามกฎใน `AGENTS.md`:
+  - ทุก Endpoint/Logic ใหม่ต้องมี Unit Test ใน `*.spec.ts`
+  - ต้องอัปเดต `AGENTS.md` และ `api-docs.html` ในงานเดียวกัน
+  - รัน `pnpm lint && pnpm test && pnpm build` ผ่านก่อนส่งงาน
+- **ต้องแก้ Guard DI ที่มีอยู่ก่อน** (ดู Task 1.1) เพราะ `RoleGuard` inject `UsersService` แต่บาง Module ยังไม่ได้ import `UsersModule`
+
+---
+
+## Sprint 1: Foundation, Guard Wiring & Date Bucketing
+
+**Goal**: เตรียม Module, DTO, Type, Utility และแก้ปัญหา Guard DI ให้ Endpoint ที่มี Guard ทำงานได้จริงตอน Runtime
+
 **Demo/Validation**:
-- รัน `pnpm build` และ `pnpm lint` ผ่านโดยไม่มี Error
-- เมื่อรันแอปในโหมด `ENV=development` ตารางทั้งหมดถูกสร้างใน schema `apay` พร้อมเปิด RLS ครบทุกตาราง
+- `DashboardModule` ถูกโหลดใน `AppModule`
+- Boot TestingModule ที่มี `DashboardController` + Guard แล้วไม่ error
+- `pnpm build` ผ่าน
 
-### Task 1.1: Install `@nestjs/schedule` and Register `ScheduleModule`
-- **Location**: `package.json`, `src/app.module.ts`
+### Task 1.1: Fix Guard Dependency Injection across guarded modules
+
+- **Location**:
+  - `src/packages/packages.module.ts`
+  - `src/subscriptions/subscriptions.module.ts`
+  - `src/api-keys/api-keys.module.ts`
+  - `src/dashboard/dashboard.module.ts` (จะสร้างใน Task 1.2)
 - **Description**:
-  - ติดตั้ง `@nestjs/schedule` ด้วยคำสั่ง `pnpm add @nestjs/schedule`
-  - นำเข้า `ScheduleModule.forRoot()` ใน `imports` ของ `src/app.module.ts`
+  - ปัจจุบัน Controller ใน Packages/Subscriptions/ApiKeys ใช้ `@UseGuards(JwtAuthGuard, RoleGuard)` แต่ Module ไม่ได้ import `UsersModule`
+  - `RoleGuard` inject `UsersService` → Nest ไม่สามารถ resolve dependency ได้เมื่อ boot แอปจริง
+  - เพิ่ม `UsersModule` เข้า `imports` ของทั้ง 3 Module (และ DashboardModule)
+  - **ห้าม import `AuthModule` เข้า `SubscriptionsModule`** เพราะจะเกิด circular dependency (`AuthModule` import `SubscriptionsModule` อยู่แล้ว)
+  - `JwtStrategy` ยังคง register ผ่าน `AuthModule` ที่ `AppModule` import อยู่แล้ว
 - **Dependencies**: None
 - **Acceptance Criteria**:
-  - มี `@nestjs/schedule` ใน `package.json`
-  - `AppModule` โหลด `ScheduleModule.forRoot()` สำเร็จ
-- **Validation**: `pnpm build`
+  - ทั้ง 4 Module import `UsersModule`
+  - ไม่มี circular dependency
+  - Controller ที่มี Guard สามารถ boot ได้ใน TestingModule
+- **Validation**:
+  - `pnpm build`
+  - เพิ่ม `src/dashboard/dashboard.module.spec.ts` ที่ boot Controller พร้อม mock `UsersService` และ mock `DashboardService` (Task 5.1) เพื่อยืนยันว่า Guard resolve ได้
 
-### Task 1.2: Create `Package` Entity (`packages`)
-- **Location**: `src/packages/entities/package.entity.ts`
-- **Description**:
-  - สร้าง Entity `@Entity({ schema: DB_SCHEMA, name: 'packages' })`
-  - คอลัมน์:
-    - `id`: `@PrimaryGeneratedColumn('uuid')`
-    - `code`: `@Column({ type: 'varchar', length: 50, unique: true })` (เช่น `'FREE'`, `'STARTER'`, `'PRO'`)
-    - `name`: `@Column({ type: 'varchar', length: 150 })`
-    - `description`: `@Column({ type: 'text', nullable: true })`
-    - `price`: `@Column({ type: 'numeric', precision: 12, scale: 2, default: 0, transformer: numericTransformer })`
-    - `max_api_keys`: `@Column({ type: 'int', name: 'max_api_keys', default: 1 })`
-    - `quota_limit`: `@Column({ type: 'int', name: 'quota_limit' })`
-    - `rate_limit_per_hour`: `@Column({ type: 'int', name: 'rate_limit_per_hour' })`
-    - `billing_cycle_months`: `@Column({ type: 'int', name: 'billing_cycle_months', default: 1 })`
-    - `is_active`: `@Column({ type: 'boolean', name: 'is_active', default: true })`
-    - `deleted_at`: `@DeleteDateColumn({ type: 'timestamptz', name: 'deleted_at', nullable: true })`
-    - `created_at`: `@CreateDateColumn({ type: 'timestamptz' })`
-    - `updated_at`: `@UpdateDateColumn({ type: 'timestamptz' })`
-- **Dependencies**: Task 1.1
-- **Acceptance Criteria**:
-  - ใช้ `DB_SCHEMA` และ `numericTransformer` ถูกต้อง
-  - รองรับ Soft Delete ด้วย `@DeleteDateColumn`
-- **Validation**: `pnpm build`
+### Task 1.2: Create DashboardModule and register in AppModule
 
-### Task 1.3: Create `BusinessSubscription` and `SubscriptionPeriod` Entities
 - **Location**:
-  - `src/subscriptions/entities/business-subscription.entity.ts`
-  - `src/subscriptions/entities/subscription-period.entity.ts`
-- **Description**:
-  - สร้าง `BusinessSubscription` (`@Entity({ schema: DB_SCHEMA, name: 'business_subscriptions' })`):
-    - `id`: `uuid` PK
-    - `business_id`: `uuid` (`@Index('idx_business_subscriptions_business')`, FK -> `Business`, `onDelete: 'CASCADE'`)
-    - `package_id`: `uuid` (FK -> `Package`)
-    - `status`: `varchar(20)` (`'ACTIVE' | 'PAST_DUE' | 'CANCELLED'`, default `'ACTIVE'`) — `PAST_DUE` = ครบรอบบิลแล้วยังไม่ชำระเงิน (ไม่มี grace period)
-    - `quota_limit`: `int`
-    - `quota_used`: `int`, default `0`
-    - `quota_remaining`: `int`
-    - `rate_limit_per_hour`: `int`
-    - `max_api_keys`: `int`
-    - `current_period_start`: `timestamptz`
-    - `current_period_end`: `timestamptz` (`@Index('idx_business_subscriptions_period_end')`)
-    - `cancelled_at`: `timestamptz`, nullable
-    - `last_payment_at`: `timestamptz`, nullable — เวลาที่ชำระเงิน/ต่ออายุล่าสุด (ใช้ Audit การจ่ายเงินแบบ Prepaid)
-    - `deleted_at`: `@DeleteDateColumn({ type: 'timestamptz', nullable: true })`
-    - `created_at`, `updated_at`: `timestamptz`
-  - สร้าง `SubscriptionPeriod` (`@Entity({ schema: DB_SCHEMA, name: 'subscription_periods' })`) สำหรับเก็บ Snapshot ประวัติโควต้าแต่ละรอบเดือนก่อนถูกรีเซ็ต:
-    - `id`: `uuid` PK
-    - `subscription_id`: `uuid` (FK -> `BusinessSubscription`, `onDelete: 'CASCADE'`)
-    - `business_id`: `uuid`
-    - `package_id`: `uuid`
-    - `period_start`: `timestamptz`
-    - `period_end`: `timestamptz`
-    - `quota_limit`: `int`
-    - `quota_used`: `int`
-    - `created_at`: `timestamptz`
-- **Dependencies**: Task 1.2
-- **Acceptance Criteria**:
-  - มี Index สำหรับค้นหาตาม `business_id` และ `current_period_end`
-- **Validation**: `pnpm build`
-
-### Task 1.4: Create `ApiKey` and `ApiKeyUsageLog` Entities
-- **Location**:
-  - `src/api-keys/entities/api-key.entity.ts`
-  - `src/api-keys/entities/api-key-usage-log.entity.ts`
-- **Description**:
-  - สร้าง `ApiKey` (`@Entity({ schema: DB_SCHEMA, name: 'api_keys' })`):
-    - `id`: `uuid` PK
-    - `business_id`: `uuid` (`@Index('idx_api_keys_business')`, FK -> `Business`, `onDelete: 'CASCADE'`)
-    - `name`: `varchar(100)`
-    - `key_prefix`: `varchar(24)`, unique (`apay_live_<8_hex>`)
-    - `key_hash`: `varchar(128)`
-    - `refresh_token_hash`: `varchar(128)`, nullable
-    - `is_active`: `boolean`, default `true`
-    - `last_used_at`: `timestamptz`, nullable
-    - `deleted_at`: `@DeleteDateColumn({ type: 'timestamptz', name: 'deleted_at', nullable: true })`
-    - `created_at`, `updated_at`: `timestamptz`
-  - สร้าง `ApiKeyUsageLog` (`@Entity({ schema: DB_SCHEMA, name: 'api_key_usage_logs' })`):
-    - Index: `@Index('idx_usage_logs_business_action_created', ['business_id', 'action', 'created_at'])`
-    - Index: `@Index('idx_usage_logs_api_key_created', ['api_key_id', 'created_at'])`
-    - `id`: `uuid` PK
-    - `api_key_id`: `uuid` (FK -> `ApiKey`, `onDelete: 'CASCADE'`)
-    - `business_id`: `uuid` (FK -> `Business`, `onDelete: 'CASCADE'`)
-    - `payment_order_id`: `varchar(64)`, nullable
-    - `action`: `varchar(30)` (`'QR_CREATED' | 'QR_PAID'`)
-    - `quota_deducted`: `boolean`, default `false`
-    - `created_at`: `@CreateDateColumn({ type: 'timestamptz' })`
-- **Dependencies**: Task 1.2
-- **Acceptance Criteria**:
-  - รองรับ Soft Delete ที่ `ApiKey` และเก็บประวัติใน `ApiKeyUsageLog` ได้แม้ Key ถูก Soft Delete ไปแล้ว
-- **Validation**: `pnpm build`
-
-### Task 1.5: Update `Business`, `PaymentOrder`, and `DatabaseSecurityService`
-- **Location**:
-  - `src/business/entities/business.entity.ts`
-  - `src/payment/entities/payment-order.entity.ts`
-  - `src/database/database-security.service.ts`
-- **Description**:
-  - ใน `Business`:
-    - ปรับ `api_key_prefix` และ `api_key_hash` ให้เป็น `nullable: true` (หรือถอดความต้องการบังคับค่าเมื่อสมัคร Business ใหม่) เพื่อป้องกันข้อมูลเดิมสูญหายทันทีและรองรับการสร้าง Business โดยยังไม่มี API Key
-  - ใน `PaymentOrder`:
-    - เพิ่มคอลัมน์ `api_key_id`: `@Column({ type: 'uuid', name: 'api_key_id', nullable: true })` และ Relation `@ManyToOne(() => ApiKey, { nullable: true, onDelete: 'SET NULL' }) @JoinColumn({ name: 'api_key_id' })`
-  - ใน `src/database/database-security.service.ts`:
-    - เพิ่ม `'packages'`, `'business_subscriptions'`, `'subscription_periods'`, `'api_keys'`, `'api_key_usage_logs'` ลงใน `TABLES`
-- **Dependencies**: Task 1.2, Task 1.3, Task 1.4
-- **Acceptance Criteria**:
-  - `TABLES` ใน `DatabaseSecurityService` มีครบทั้ง 10 ตาราง
-  - `PaymentOrder` สามารถเก็บ `api_key_id` ได้
-- **Validation**: `pnpm build && pnpm lint`
-
----
-
-## Sprint 2: Master Package Module & Default Package Seeding
-
-**Goal**: สร้าง CRUD สำหรับจัดการ Master Package (`/api/v1/packages`) สำหรับ Admin และการดูรายการ Package รวมถึง Seed แพ็กเกจเริ่มต้น
-**Demo/Validation**:
-- Admin สามารถเพิ่ม แก้ไข ดู และลบ (Soft Delete) Master Package ได้
-- หากลบ Package ที่มี Subscription `ACTIVE` หรือ `PAST_DUE` ผูกอยู่ ระบบต้องปฏิเสธด้วย `409 Conflict`
-
-### Task 2.1: Create Package DTOs
-- **Location**:
-  - `src/packages/dto/create-package.dto.ts`
-  - `src/packages/dto/update-package.dto.ts`
-- **Description**:
-  - `CreatePackageDto`:
-    - `code`: `@IsString() @IsNotEmpty() @MaxLength(50)`
-    - `name`: `@IsString() @IsNotEmpty() @MaxLength(150)`
-    - `description`: `@IsOptional() @IsString()`
-    - `price`: `@IsNumber() @Min(0)`
-    - `max_api_keys`: `@IsInt() @Min(1)`
-    - `quota_limit`: `@IsInt() @Min(1)`
-    - `rate_limit_per_hour`: `@IsInt() @Min(1)`
-    - `billing_cycle_months`: `@IsOptional() @IsInt() @Min(1)` (default `1`)
-    - `is_active`: `@IsOptional() @IsBoolean()`
-  - `UpdatePackageDto`: ฟิลด์ข้างต้นทั้งหมดแบบ `@IsOptional()`
-- **Dependencies**: Task 1.2
-- **Acceptance Criteria**:
-  - มี `class-validator` decorators ครบถ้วน
-- **Validation**: `pnpm build`
-
-### Task 2.2: Implement `PackagesService` and `PackagesController`
-- **Location**:
-  - `src/packages/packages.service.ts`
-  - `src/packages/packages.controller.ts`
-  - `src/packages/packages.module.ts`
+  - `src/dashboard/dashboard.module.ts`
   - `src/app.module.ts`
 - **Description**:
-  - `PackagesService`:
-    - `create(dto)`: ตรวจสอบ `code` ซ้ำ (ถ้าซ้ำโยน `409 ConflictException`), บันทึกลง `packages`
-    - `findAll(onlyActive?: boolean)`: คืนรายการแพ็กเกจทั้งหมดที่ยังไม่ถูก Soft Delete
-    - `findByIdOrFail(id: string)`: คืนแพ็กเกจ (ถ้าไม่พบโยน `404 NotFoundException`)
-    - `findActiveByIdOrFail(id: string)`: คืนแพ็กเกจที่ `is_active = true` (ถ้าไม่พบหรือ inactive โยน `400/404`)
-    - `update(id, dto)`: อัปเดตข้อมูลแพ็กเกจ
-    - `softDelete(id)`: ตรวจสอบก่อนว่ามี `BusinessSubscription` ที่ `package_id = id` และ `status IN ('ACTIVE', 'PAST_DUE')` (ยังไม่ถูกยกเลิก) อยู่หรือไม่ ถ้ามีให้โยน `409 ConflictException('Cannot delete package with active or past-due subscriptions')` ถ้าไม่มีให้ตั้ง `is_active = false` และเรียก `softRemove`
-  - `PackagesController` (`@Controller({ path: 'packages', version: '1' })`):
-    - `POST /` (`@Roles('admin')`)
-    - `GET /` (`@Roles('admin', 'business')` — ถ้าเป็น `business` ให้บังคับ `onlyActive = true`)
-    - `GET /:id` (`@Roles('admin', 'business')`)
-    - `PATCH /:id` (`@Roles('admin')`)
-    - `DELETE /:id` (`@Roles('admin')`)
-- **Dependencies**: Task 2.1, Task 1.3
+  - สร้าง `DashboardModule`
+  - `TypeOrmModule.forFeature([...])` สำหรับ:
+    - `PaymentOrder`
+    - `ApiKeyUsageLog`
+    - `ApiKey`
+    - `BusinessSubscription`
+    - `SubscriptionPeriod`
+    - `Package`
+    - `Business`
+    - `WebhookLog`
+  - import `UsersModule` (Guard) และ `SubscriptionsModule` (ใช้ `SubscriptionsService.getCurrentSubscription`)
+  - ลงทะเบียน `DashboardController`, `DashboardService`
+  - เพิ่ม `DashboardModule` ใน `imports` ของ `AppModule`
+- **Dependencies**: Task 1.1
 - **Acceptance Criteria**:
-  - ทุก Endpoint ป้องกันด้วย `@UseGuards(JwtAuthGuard, RoleGuard)`
-- **Validation**: เขียน Unit Test `src/packages/packages.service.spec.ts` และรัน `pnpm test`
-
-### Task 2.3: Seed Default Master Packages in `DatabaseSeederService`
-- **Location**:
-  - `src/database/database.module.ts`
-  - `src/database/database-seeder.service.ts`
-- **Description**:
-  - เพิ่ม `Package` เข้า `TypeOrmModule.forFeature([User, Role, Package])` ใน `DatabaseModule`
-  - เพิ่ม `seedDefaultPackages()` ใน `DatabaseSeederService` เพื่อสร้างแพ็กเกจเริ่มต้นหากยังไม่มีในระบบ เช่น:
-    - `FREE`: `price: 0, max_api_keys: 1, quota_limit: 100, rate_limit_per_hour: 60, billing_cycle_months: 1`
-    - `STARTER`: `price: 499, max_api_keys: 3, quota_limit: 1000, rate_limit_per_hour: 300, billing_cycle_months: 1`
-    - `PRO`: `price: 1499, max_api_keys: 10, quota_limit: 5000, rate_limit_per_hour: 1200, billing_cycle_months: 1`
-- **Dependencies**: Task 2.2
-- **Acceptance Criteria**:
-  - Seeder ทำงานแบบ idempotent (ถ้ามี `code` นั้นอยู่แล้วจะไม่สร้างซ้ำ)
-- **Validation**: `pnpm build && pnpm test`
-
----
-
-## Sprint 3: Business Subscription, Prepaid Billing Enforcement & Private Package Mapping
-
-**Goal**: สร้างระบบผูก Package ให้ Business แบบ Prepaid, Private Function สำหรับ Map Package → Subscription, กลไก Lazy Expiry + Cron รายชั่วโมงเพื่อตัดสิทธิ์เมื่อยังไม่ชำระเงิน, การต่ออายุ (Renew) และการตัดโควต้า
-**Demo/Validation**:
-- ทดสอบคำนวณวันครบรอบเดือนถัดไป (`addMonthsClamped`) ได้ถูกต้องแม้เป็นวันสิ้นเดือน (เช่น 31 ม.ค. -> 28/29 ก.พ.)
-- เมื่อเปลี่ยน Package โควต้าถูกรีเซ็ตตาม Package ใหม่ทันที (`quota_remaining = quota_limit` ใหม่)
-- เมื่อถึง `current_period_end` แล้วไม่มีการต่ออายุ: Snapshot ลง `subscription_periods`, `status = 'PAST_DUE'`, `quota_remaining = 0` และสร้าง QR ไม่ได้ — **โควต้าไม่ถูกรีเซ็ตให้ฟรี**
-- เมื่อ Admin ต่ออายุ (`renew`) โควต้าถูกรีเซ็ตใหม่และ `status = 'ACTIVE'`
-
-### Task 3.1: Add Monthly Anniversary Date Helper in `datetime.util.ts`
-- **Location**: `src/common/utils/datetime.util.ts`
-- **Description**:
-  - เพิ่มฟังก์ชัน `addMonthsClamped(date: Date, months: number): Date` ที่บวกจำนวนเดือนโดยรักษาวันและเวลาเดิม และหากเดือนปลายทางมีจำนวนวันน้อยกว่า (เช่น วันที่ 31 ไปเดือนกุมภาพันธ์) ให้ Clamp เป็นวันสุดท้ายของเดือนนั้นอย่างถูกต้อง
-- **Dependencies**: None
-- **Acceptance Criteria**:
-  - `addMonthsClamped` คำนวณวันครบรอบรายเดือนได้แม่นยำไม่กระโดดข้ามเดือน
-- **Validation**: เขียน Unit Test ทดสอบกรณีทั่วไปและกรณีวันสิ้นเดือน (28/29/30/31)
-
-### Task 3.2: Implement `SubscriptionsService` (Prepaid Billing, Renewal & Quota Enforcement)
-- **Location**:
-  - `src/subscriptions/subscriptions.service.ts`
-  - `src/subscriptions/dto/assign-subscription.dto.ts`
-  - `src/subscriptions/dto/renew-subscription.dto.ts`
-  - `src/subscriptions/subscriptions.controller.ts`
-  - `src/subscriptions/subscriptions.module.ts`
-- **Description**:
-  - **Private Function 1** — `private applyPackageToSubscription(businessId: string, pkg: Package, manager: EntityManager, periodStart?: Date): Promise<BusinessSubscription>`:
-    - ค้นหา Subscription เดิมของ `businessId` (`status IN ('ACTIVE', 'PAST_DUE')`, ไม่ถูกลบ)
-    - หากมีอยู่และมี `quota_used > 0` ให้บันทึก Snapshot รอบเดิมลง `subscription_periods` ก่อนทับค่า
-    - Map ค่าจาก `pkg` ลง Subscription (เริ่มรอบบิลใหม่):
-      - `package_id = pkg.id`
-      - `status = 'ACTIVE'`
-      - `quota_limit = pkg.quota_limit`
-      - `quota_used = 0`
-      - `quota_remaining = pkg.quota_limit`
-      - `rate_limit_per_hour = pkg.rate_limit_per_hour`
-      - `max_api_keys = pkg.max_api_keys`
-      - `current_period_start = periodStart ?? now`
-      - `current_period_end = addMonthsClamped(current_period_start, pkg.billing_cycle_months)`
-      - `last_payment_at = now`
-    - **โควต้าจะรีเซ็ตเฉพาะเมื่อเรียกฟังก์ชันนี้ (ผูก/เปลี่ยน Package หรือต่ออายุ) เท่านั้น**
-  - **Private Function 2** — `expireIfPastDue(subscription: BusinessSubscription, manager?: EntityManager): Promise<BusinessSubscription>` (Lazy Expiry):
-    - ถ้า `subscription.status === 'ACTIVE'` และ `now >= subscription.current_period_end`:
-      - บันทึก Snapshot รอบที่จบลง `subscription_periods` (`quota_limit`, `quota_used`, `period_start`, `period_end`)
-      - เปลี่ยน `status = 'PAST_DUE'`
-      - ตั้ง `quota_remaining = 0` (คง `quota_used` เดิมไว้เพื่อรายงาน)
-      - **ไม่ต่ออายุ / ไม่รีเซ็ตโควต้า / ไม่มี grace period**
-    - คืนค่า subscription หลังอัปเดต (ถ้ายังไม่ครบกำหนดให้คืนค่าเดิมโดยไม่แก้ไข)
-  - **Private Function 3** — `assignOrChangePackage(businessId: string, packageId: string)`:
-    - ตรวจสอบ Business ว่า active และ Package นั้น `is_active = true` และไม่ถูกลบ
-    - เรียก `applyPackageToSubscription(businessId, pkg, manager)` ภายใน Transaction (เริ่มรอบบิลใหม่ + reset โควต้าทันที)
-  - **Private Function 4** — `renewSubscription(subscriptionId: string, packageId?: string)`:
-    - ดึง Subscription (ต้องไม่ถูกยกเลิก/ลบ)
-    - กำหนด `periodStart`:
-      - ถ้า `current_period_end > now` (ต่ออายุล่วงหน้า) → `periodStart = current_period_end` เพื่อไม่ให้วันหมดอายุหายไป
-      - ถ้าเลยกำหนดแล้ว → `periodStart = now`
-    - ถ้ามี `packageId` ให้เปลี่ยนแพ็กเกจด้วย; ถ้าไม่มีให้ใช้ Package เดิม
-    - เรียก `applyPackageToSubscription(..., periodStart)` → `status = 'ACTIVE'`, reset โควต้า, `last_payment_at = now`
-  - **Cron** — `@Cron(CronExpression.EVERY_HOUR) async handleHourlyBillingEnforcement()`:
-    - ค้นหา `BusinessSubscription` ที่ `status = 'ACTIVE'` และ `current_period_end <= new Date()`
-    - เรียก `expireIfPastDue` ทีละรายการ (ทำหน้าที่ **ตัดสิทธิ์** ไม่ใช่รีเซ็ตโควต้า)
-    - ห่อ try/catch ต่อรายการ + `Logger.warn` เพื่อไม่ให้รายการเดียวล้มทั้ง batch
-  - **เมธอดตรวจสอบและตัดโควต้า**:
-    - `assertQuotaAndRateLimit(businessId: string, manager?: EntityManager)`:
-      - ดึง Subscription ล่าสุดของ Business แล้วเรียก `expireIfPastDue`
-      - ถ้าไม่มี Subscription หรือ `status !== 'ACTIVE'` (รวมถึง `PAST_DUE` / `CANCELLED`) โยน `ForbiddenException('Business package is inactive or unpaid')`
-      - ถ้า `quota_remaining <= 0` โยน `HttpException('Monthly package quota exceeded', HttpStatus.TOO_MANY_REQUESTS)`
-      - นับจำนวน `ApiKeyUsageLog` ที่ `business_id = businessId`, `action = 'QR_CREATED'`, และ `created_at >= now - 1 hour`
-      - ถ้าจำนวน `>= subscription.rate_limit_per_hour` โยน `HttpException('Hourly rate limit exceeded for this business', HttpStatus.TOO_MANY_REQUESTS)`
-    - `deductQuotaOnPaid(order: PaymentOrder, manager: EntityManager): Promise<boolean>`:
-      - ล็อกแถว `BusinessSubscription` ด้วย `pessimistic_write`
-      - เรียก `expireIfPastDue(subscription, manager)`
-      - ถ้า `subscription.status === 'ACTIVE'` และ `quota_remaining > 0`:
-        - `quota_remaining -= 1`, `quota_used += 1`
-        - บันทึกและคืนค่า `true` (`quota_deducted = true`)
-      - ถ้า `status !== 'ACTIVE'` หรือ `quota_remaining <= 0` คืนค่า `false` (ไม่ให้ค่าติดลบ แต่ไม่ให้ธุรกรรมการจ่ายเงินล้มเหลว)
-  - **`SubscriptionsController`** (`/api/v1/subscriptions`):
-    - `POST /` (`admin`): ผูกหรือเปลี่ยน Package ให้ Business (`{ business_id, package_id }`) → เริ่มรอบบิลใหม่ + reset โควต้า
-    - `POST /:id/renew` (`admin`): ต่ออายุรอบบิล (`{ package_id?: string }`) → reset โควต้า, `status = 'ACTIVE'`, ตั้ง `last_payment_at`
-    - `GET /business/:businessId` (`admin`, `business`): ดู `status`, โควต้าคงเหลือ, `current_period_end` (paid-through), `last_payment_at`, จำนวน Key ที่ใช้/สูงสุด และประวัติรอบบิล (`subscription_periods`)
-    - `GET /business/:businessId/usage` (`admin`, `business`): สรุปการใช้งานรอบปัจจุบัน + แยกตาม API Key
-- **Dependencies**: Task 1.3, Task 2.2, Task 3.1
-- **Acceptance Criteria**:
-  - มี Private Function สำหรับ Map ค่าจาก Package → Subscription และรีเซ็ตโควต้าเฉพาะตอนผูก/เปลี่ยนแพ็กเกจหรือต่ออายุ
-  - ครบกำหนดโดยไม่ต่ออายุ → `PAST_DUE` + `quota_remaining = 0` และสร้าง QR ไม่ได้ (ไม่มี grace period)
-  - Cron รายชั่วโมงตัดสิทธิ์ได้แม้ไม่มี Request เข้ามา
-- **Validation**: เขียน Unit Test `src/subscriptions/subscriptions.service.spec.ts` (ใช้ `jest.useFakeTimers()` ควบคุมเวลา) ครอบคลุม:
-  - ผูก/เปลี่ยนแพ็กเกจ → reset โควต้าและ Snapshot รอบเดิม
-  - `expireIfPastDue` ทั้งกรณียังไม่ครบกำหนด (ไม่แก้ไข) และครบกำหนดแล้ว (`PAST_DUE`, quota = 0, snapshot 1 แถว)
-  - `renewSubscription` ทั้งกรณีต่ออายุล่วงหน้า (period start ต่อจากของเดิม) และต่ออายุหลังเลยกำหนด (`period start = now`)
-  - `assertQuotaAndRateLimit`: ไม่มี subscription / `PAST_DUE` / quota หมด / เกิน rate limit / ผ่านเคสปกติ
-  - `deductQuotaOnPaid`: หักสำเร็จ, quota = 0 (คืน `false`), และ subscription ไม่ active (คืน `false`)
-
----
-
-## Sprint 4: API Key Management & Usage Tracking Module
-
-**Goal**: สร้างระบบจัดการ API Key (เพิ่มได้หลาย Key ต่อ Business ตามเพดานแพ็กเกจ, เปิด/ปิด `is_active`, ลบแบบ Soft Delete) และระบบ Track การใช้งานตาม Business และตาม Key
-**Demo/Validation**:
-- สร้าง API Key ใหม่ได้เมื่อ Business มี Subscription ที่ `ACTIVE` (ยังไม่เลยวันจ่ายถึง) และจำนวน Key ยังไม่เกิน `max_api_keys`
-- สร้าง API Key ไม่ได้เมื่อ Subscription เป็น `PAST_DUE` (ยังไม่ชำระเงินรอบใหม่)
-- ปิดการใช้งาน (`is_active = false`) หรือลบ (`DELETE`) ได้
-- เรียกดูสถิติการใช้งานทั้งระดับ Business และระดับ API Key รายตัวได้
-
-### Task 4.1: Create API Key DTOs
-- **Location**:
-  - `src/api-keys/dto/create-api-key.dto.ts`
-  - `src/api-keys/dto/update-api-key.dto.ts`
-- **Description**:
-  - `CreateApiKeyDto`:
-    - `business_id`: `@IsOptional() @IsUUID()` (Admin ระบุได้, ส่วน Business ใช้ `req.user.businessId`)
-    - `name`: `@IsString() @IsNotEmpty() @MaxLength(100)`
-    - `package_id`: `@IsOptional() @IsUUID()` (กรณี Admin ต้องการผูก/อัปเดต Package ให้ Business พร้อมกับการสร้าง Key)
-  - `UpdateApiKeyDto`:
-    - `name`: `@IsOptional() @IsString() @MaxLength(100)`
-    - `is_active`: `@IsOptional() @IsBoolean()`
-- **Dependencies**: Task 1.4
-- **Acceptance Criteria**:
-  - Validate input ด้วย `class-validator` ครบถ้วน
+  - Module โหลดได้โดยไม่ชนกับ Module อื่น
+  - ไม่มี circular dependency
 - **Validation**: `pnpm build`
 
-### Task 4.2: Implement `ApiKeysService` and `ApiKeysController`
-- **Location**:
-  - `src/api-keys/api-keys.service.ts`
-  - `src/api-keys/api-keys.controller.ts`
-  - `src/api-keys/api-keys.module.ts`
+### Task 1.3: Create shared Dashboard types
+
+- **Location**: `src/dashboard/types/dashboard.types.ts`
 - **Description**:
-  - `ApiKeysService`:
-    - `createApiKey(user: AuthUser, dto: CreateApiKeyDto)`:
-      - กำหนด `businessId` (ถ้า `user.role === 'business'` บังคับใช้ `user.businessId`; ถ้า `admin` ใช้ `dto.business_id`)
-      - ถ้า `user.role === 'admin'` และส่ง `dto.package_id` มาด้วย ให้เรียก `subscriptionsService.assignOrChangePackage(businessId, dto.package_id)` ก่อน
-      - ตรวจสอบว่า Business มี Subscription ที่ `status = 'ACTIVE'` และยังไม่เลย `current_period_end` (ถ้าไม่มี/ไม่ active/`PAST_DUE` โยน `400 BadRequestException('Business has no active prepaid package subscription')`)
-      - นับจำนวน API Key ปัจจุบันของ Business ที่ยังไม่ถูกลบ (`deleted_at IS NULL`)
-      - ถ้า `currentKeyCount >= subscription.max_api_keys` โยน `409 ConflictException('Maximum API keys limit reached for current package')`
-      - สร้าง Key ด้วย `generateApiKey()` (`src/auth/utils/api-key.util.ts`) บันทึก `key_prefix` และ `key_hash` ลง `api_keys` และคืนค่า `rawApiKey` เพียงครั้งเดียว
-    - `findAll(user: AuthUser, businessId?: string)`:
-      - คืนรายการ API Key (ไม่คืน `key_hash` และ `refresh_token_hash`)
-    - `updateStatusOrName(user: AuthUser, id: string, dto: UpdateApiKeyDto)`:
-      - อัปเดต `name` หรือ `is_active` (ถ้าตั้ง `is_active = false` ให้ล้าง `refresh_token_hash = null` เพื่อยกเลิก Refresh Token เดิมของ Key นั้นทันที)
-    - `revokeApiKey(user: AuthUser, id: string)`:
-      - ตั้ง `is_active = false`, `refresh_token_hash = null`, และทำ Soft Delete (`softRemove`) เพื่อคืน Slot `max_api_keys` แต่ยังเก็บแถวไว้ให้ `api_key_usage_logs` อ้างอิงได้
-    - `getKeyUsage(user: AuthUser, apiKeyId: string)`:
-      - ดึงข้อมูล Key (รวมถึง Key ที่ถูก Soft Delete ถ้าค้นหาด้วย `withDeleted: true`)
-      - สรุปจำนวน `total_qr_created`, `total_qr_paid_and_deducted`, จำนวนครั้งในชั่วโมงล่าสุด, และรายการ `recent_logs`
-    - `getBusinessUsage(user: AuthUser, businessId: string)`:
-      - ดึงข้อมูล Subscription ปัจจุบัน (`status`, `quota_limit`, `quota_used`, `quota_remaining`, `rate_limit_per_hour`, `max_api_keys`, `current_period_start`, `current_period_end`, `last_payment_at`)
-      - นับจำนวนการใช้งานใน 1 ชั่วโมงล่าสุดของ Business (`current_hour_requests`)
-      - สรุปยอดการใช้งานแยกตามแต่ละ API Key ของ Business นั้น (`keys_breakdown`: `api_key_id`, `name`, `key_prefix`, `is_active`, `deleted_at`, `qr_created_count`, `qr_paid_count`, `quota_deducted_count`, `last_used_at`)
-  - `ApiKeysController` (`@Controller({ path: 'api-keys', version: '1' })`):
-    - `POST /` (`@Roles('admin', 'business')`)
-    - `GET /` (`@Roles('admin', 'business')`)
-    - `GET /usage/business/:businessId` (`@Roles('admin', 'business')`)
-    - `GET /:id/usage` (`@Roles('admin', 'business')`)
-    - `PATCH /:id` (`@Roles('admin', 'business')`)
-    - `DELETE /:id` (`@Roles('admin', 'business')`)
-- **Dependencies**: Task 3.2, Task 4.1
+  - ประกาศ Type/Interface กลาง:
+
+```ts
+export type DashboardInterval = 'hour' | 'day';
+
+export interface DashboardRange {
+  from: string; // ISO
+  to: string;   // ISO
+  interval: DashboardInterval;
+  timezone: 'Asia/Bangkok';
+}
+
+export interface DashboardSeriesPoint {
+  bucket_start: string;
+  label: string;
+  value: number;
+}
+
+export interface DashboardSeries {
+  key: string;
+  label: string;
+  points: DashboardSeriesPoint[];
+}
+
+export interface DashboardPagination {
+  page: number;
+  limit: number;
+  total: number;
+  total_pages: number;
+}
+```
+
+  - เพิ่ม Type สำหรับ response ของแต่ละ Endpoint (Overview, Usage, Transactions, RateLimit, ApiKeyBreakdown, SubscriptionTrend, AdminOverview, AdminTimeseries, AdminDistribution, AdminBusinessList, AdminExpiring)
+- **Dependencies**: Task 1.2
 - **Acceptance Criteria**:
-  - Business สามารถเข้าถึงหรือจัดการได้เฉพาะข้อมูลของ `businessId` ตัวเองเท่านั้น (ถ้าเข้าถึงของร้านอื่นให้โยน `404/403`)
-  - Admin สามารถจัดการและดู Usage ของทุก Business ได้
-- **Validation**: เขียน Unit Test `src/api-keys/api-keys.service.spec.ts`
+  - Type ใช้ร่วมกันใน Service/Controller/Tests
+  - ไม่ใช้ `any` ใน response หลัก
+- **Validation**: `pnpm build`
+
+### Task 1.4: Create Dashboard DTOs
+
+- **Location**:
+  - `src/dashboard/dto/dashboard-range-query.dto.ts`
+  - `src/dashboard/dto/dashboard-usage-query.dto.ts`
+  - `src/dashboard/dto/dashboard-api-keys-query.dto.ts`
+  - `src/dashboard/dto/admin-businesses-query.dto.ts`
+  - `src/dashboard/dto/dashboard-expiring-query.dto.ts`
+- **Description**:
+  - `DashboardRangeQueryDto`:
+    - `from?: string` → `@IsOptional() @IsISO8601()`
+    - `to?: string` → `@IsOptional() @IsISO8601()`
+    - `interval?: 'hour' | 'day'` → `@IsOptional() @IsIn(['hour','day'])`
+    - `business_id?: string` → `@IsOptional() @IsUUID()`
+  - `DashboardUsageQueryDto extends DashboardRangeQueryDto`:
+    - `metric?: 'qr_created' | 'qr_paid' | 'quota_deducted'` default `qr_created`
+    - `api_key_id?: string` → `@IsOptional() @IsUUID()`
+  - `DashboardApiKeysQueryDto extends DashboardRangeQueryDto`:
+    - `include_deleted?: boolean` default `true` (ใช้ `@Transform` หรือ parse string)
+  - `AdminBusinessesQueryDto extends DashboardRangeQueryDto`:
+    - `search?: string` (`@MaxLength(150)`)
+    - `package_id?: string` (`@IsUUID`)
+    - `status?: 'ACTIVE' | 'PAST_DUE' | 'CANCELLED'`
+    - `sort_by?: 'gmv' | 'qr_created' | 'qr_paid' | 'quota_used' | 'current_period_end' | 'created_at'`
+    - `sort_order?: 'asc' | 'desc'` default `desc`
+    - `page?: number` default `1`, `@Min(1)`
+    - `limit?: number` default `20`, `@Min(1) @Max(100)`
+  - `DashboardExpiringQueryDto`:
+    - `days?: number` default `7`, `@Min(1) @Max(90)`
+    - `quota_threshold?: number` default `0.8`, `@Min(0) @Max(1)`
+- **Dependencies**: Task 1.3
+- **Acceptance Criteria**:
+  - Validation ทำงานผ่าน Global `ValidationPipe`
+  - ค่า default ถูก resolve ใน Service (ไม่พึ่งพิงแค่ DTO)
+- **Validation**: `pnpm build`
+
+### Task 1.5: Implement Bangkok bucket utilities
+
+- **Location**:
+  - `src/dashboard/utils/dashboard-bucket.util.ts`
+  - `src/dashboard/utils/dashboard-bucket.util.spec.ts`
+- **Description**:
+  - ฟังก์ชันที่ต้องมี:
+
+```ts
+export function resolveDashboardRange(
+  from?: string,
+  to?: string,
+  interval: DashboardInterval = 'day',
+  now: Date = new Date(),
+): { from: Date; to: Date; interval: DashboardInterval };
+
+export function generateBuckets(
+  from: Date,
+  to: Date,
+  interval: DashboardInterval,
+): Date[];
+
+export function formatBucketLabel(
+  bucket: Date,
+  interval: DashboardInterval,
+): string;
+```
+
+  - `resolveDashboardRange`:
+    - default `to = now`, `from = now - 30 days`
+    - throw `BadRequestException` ถ้า `from > to`
+    - throw ถ้า range > 365 วัน
+    - throw ถ้า `interval = 'hour'` และ range > 31 วัน
+    - throw ถ้า generate แล้วเกิน 744 buckets
+  - `generateBuckets`:
+    - Day → เริ่ม `00:00` เวลาไทยของวันแรก, เพิ่มทีละ 24 ชั่วโมง
+    - Hour → เริ่มต้นชั่วโมงเวลาไทย, เพิ่มทีละ 1 ชั่วโมง
+    - คืนเฉพาะ bucket ที่ `< to` (half-open)
+  - `formatBucketLabel`:
+    - Day → `20 Oct` (ใช้ `Intl.DateTimeFormat` timeZone `Asia/Bangkok`, `en-GB`)
+    - Hour → `14:00`
+- **Dependencies**: Task 1.3
+- **Acceptance Criteria**:
+  - ไม่มี bucket ซ้ำ/ข้าม
+  - ขอบเขตเที่ยงคืนเวลาไทยถูกต้อง
+  - ไม่มี DST issue (Asia/Bangkok ไม่มี DST แต่ต้องใช้ timezone ชัดเจน)
+- **Validation**: Unit Test ครอบคลุม:
+  - default range
+  - `from > to` → 400
+  - range เกิน 365 วัน → 400
+  - hour interval เกิน 31 วัน → 400
+  - day/hour bucket counts
+  - label format
+  - ขอบเขตเวลาไทย เช่น `2026-10-19T17:00:00.000Z` = `2026-10-20 00:00` เวลาไทย
+
+### Task 1.6: Implement scope & range resolver in DashboardService
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - `private resolveBusinessId(user: AuthUser, businessId?: string): string`
+    - `business`: ต้องมี `user.businessId`; ถ้า query `business_id` ถูกส่งมาและไม่ตรง → `NotFoundException('Business not found')`
+    - `admin`: ต้องส่ง `business_id` (ไม่งั้น `BadRequestException('business_id is required for admin')`)
+  - `private async getBusinessOrFail(businessId: string): Promise<Business>` → 404 ถ้าไม่พบ
+  - `private async getCurrentSubscriptionOrFail(businessId: string): Promise<BusinessSubscription>` → ใช้ `SubscriptionsService.getCurrentSubscription()`; ถ้าไม่มี → `NotFoundException('Subscription not found')`
+    - Endpoint ที่ไม่ต้องการ subscription (เช่น transactions) ไม่ต้อง throw
+  - ใช้ `resolveDashboardRange` จาก Task 1.5
+- **Dependencies**: Task 1.2, 1.5
+- **Acceptance Criteria**:
+  - Business role ไม่สามารถอ่านข้อมูลร้านอื่นได้
+  - Admin ต้องระบุ `business_id` สำหรับ business-scoped endpoints
+- **Validation**: Unit Test ใน `dashboard.service.spec.ts` (Task 5.1)
+
+### Task 1.7: Add indexes for dashboard aggregation
+
+- **Location**:
+  - `src/payment/entities/payment-order.entity.ts`
+  - `src/webhook/entities/webhook-log.entity.ts`
+  - `src/business/entities/business.entity.ts`
+  - `src/subscriptions/entities/subscription-period.entity.ts`
+- **Description**:
+  - `PaymentOrder` เพิ่ม:
+    - `@Index('idx_payment_orders_business_created', ['business_id', 'created_at'])`
+    - `@Index('idx_payment_orders_business_paid', ['business_id', 'paid_at'])`
+  - `WebhookLog` เพิ่ม:
+    - `@Index('idx_webhook_logs_created', ['created_at'])`
+    - `@Index('idx_webhook_logs_status_created', ['process_status', 'created_at'])`
+  - `Business` เพิ่ม:
+    - `@Index('idx_businesses_created', ['created_at'])`
+  - `SubscriptionPeriod` เพิ่ม:
+    - `@Index('idx_subscription_periods_business', ['business_id', 'created_at'])`
+  - ไม่มีตารางใหม่ → ไม่ต้องแก้ `TABLES` ใน `DatabaseSecurityService`
+  - TypeORM `synchronize` ใน `ENV=development` จะสร้าง index ให้เอง
+- **Dependencies**: None
+- **Acceptance Criteria**:
+  - Index ถูกสร้างเมื่อ synchronize
+  - Query Dashboard ใช้ index ที่เกี่ยวข้อง
+- **Validation**: `pnpm build` + ตรวจ schema ใน development
 
 ---
 
-## Sprint 5: Auth, Payment QR & Webhook Integration
+## Sprint 2: Business Analytics Endpoints
 
-**Goal**: เชื่อมต่อระบบแลก Token, การสร้าง QR Payment และการรับ Webhook เข้ากับตาราง `api_keys`, `business_subscriptions`, และ `api_key_usage_logs`
+**Goal**: ให้ Business/Admin เรียกข้อมูล KPI, Usage, Transaction และ Rate Limit เพื่อ plot กราฟพื้นฐาน
+
 **Demo/Validation**:
-- `POST /api/v1/auth/register-business` สร้างเฉพาะ User และ Business (ไม่สร้าง API Key ตอนสมัคร)
-- `POST /api/v1/auth/token` ตรวจสอบ API Key จากตาราง `api_keys` และแนบ `api_key_id` ใน JWT
-- `POST /api/v1/payments/qr` ตรวจเช็ค Quota & Rate Limit และบันทึก `QR_CREATED`
-- `POST /api/v1/payments/qr` จะถูกปฏิเสธ `403` เมื่อ Subscription เป็น `PAST_DUE` (ยังไม่ชำระเงินรอบใหม่)
-- `POST /api/v1/webhooks/kbank/line` เมื่อจ่ายเงินสำเร็จ จะหักโควต้าและบันทึก `QR_PAID`
+- `GET /api/v1/dashboard/overview?from=...&to=...` คืน KPI ครบ
+- `GET /api/v1/dashboard/usage/timeseries?metric=qr_created&interval=day` คืน series ที่ zero-fill
+- Business role เรียกข้อมูลร้านอื่นไม่ได้
 
-### Task 5.1: Update `AuthUser`, `JwtStrategy`, and `AuthService`
-- **Location**:
-  - `src/auth/types/auth-user.type.ts`
-  - `src/auth/strategies/jwt.strategy.ts`
-  - `src/auth/dto/register-business.dto.ts`
-  - `src/auth/auth.service.ts`
-  - `src/auth/auth.module.ts`
-- **Description**:
-  - ใน `AuthUser` และ `JwtStrategy`:
-    - เพิ่ม `apiKeyId?: string | null` ใน `AuthUser` และอ่านจาก `payload.api_key_id ?? null`
-  - ใน `RegisterBusinessDto` & `AuthService.registerBusiness`:
-    - เพิ่ม `@IsOptional() @IsUUID() package_id?: string` ใน `RegisterBusinessDto` (เผื่อระบุแพ็กเกจเริ่มต้นตอนสร้าง Business หรือปล่อยว่างได้)
-    - สร้างเฉพาะ `User` และ `Business` (ไม่ต้องสร้าง API Key ตอน `registerBusiness` ตาม Requirement)
-    - คืนค่า `{ user_id, username, role: 'business', business_id, business_name, promptpay_id }`
-  - ใน `AuthService.exchangeApiKey`:
-    - ค้นหา API Key จากตาราง `api_keys` ด้วย `key_prefix` (ต้อง `is_active = true` และ `deleted_at IS NULL`)
-    - ตรวจสอบว่า `business.is_active === true` และ `user.is_active === true`
-    - ตรวจสอบ Hash ด้วย `safeCompare(sha256(apiKey), apiKeyRecord.key_hash)`
-    - ออก Access Token & Refresh Token โดยแนบ `api_key_id: apiKeyRecord.id`
-    - บันทึก `refresh_token_hash` ลงใน `api_keys.refresh_token_hash` และอัปเดต `api_keys.last_used_at = new Date()`
-  - ใน `AuthService.refresh`:
-    - หาก JWT refresh token มี `api_key_id` ให้ตรวจสอบว่า API Key นั้นยัง `is_active = true`, ไม่ถูกลบ และ `refresh_token_hash` ตรงกัน แล้วหมุนเวียน (Rotate) `refresh_token_hash` ในตาราง `api_keys`
-- **Dependencies**: Task 4.2
-- **Acceptance Criteria**:
-  - API Key ที่ถูกตั้งเป็น `is_active = false` หรือถูกลบไปแล้ว จะไม่สามารถขอ Token หรือ Refresh Token ได้อีก
-- **Validation**: อัปเดตและรัน Unit Test ของ Auth
+### Task 2.1: Implement `getOverview(user, query)`
 
-### Task 5.2: Integrate Quota/Rate Limit Check & Usage Logging in `PaymentService`
-- **Location**:
-  - `src/payment/payment.service.ts`
-  - `src/payment/payment.module.ts`
+- **Location**: `src/dashboard/dashboard.service.ts`
 - **Description**:
-  - ใน `PaymentService.createQrOrder(user: AuthUser, dto: CreateQrDto)`:
-    - หากมี `user.apiKeyId` ให้ตรวจสอบว่า API Key ยัง `is_active = true` และไม่ถูก Soft Delete
-    - เรียก `subscriptionsService.assertQuotaAndRateLimit(business.id, manager)` ภายใน Transaction ก่อนสร้าง Order
-    - บันทึก `api_key_id: user.apiKeyId ?? null` ลงใน `PaymentOrder`
-    - หากมี `user.apiKeyId` ให้บันทึก `ApiKeyUsageLog` (`action = 'QR_CREATED'`, `quota_deducted = false`, `payment_order_id = order.id`) และอัปเดต `api_keys.last_used_at = now`
-- **Dependencies**: Task 3.2, Task 4.2, Task 5.1
-- **Acceptance Criteria**:
-  - หาก Subscription เป็น `PAST_DUE` / ถูกยกเลิก / ไม่มีแพ็กเกจ ระบบจะปฏิเสธด้วย HTTP `403 Forbidden`
-  - หากโควต้าคงเหลือเป็น 0 หรือสร้าง QR เกิน `rate_limit_per_hour` ระบบจะปฏิเสธด้วย HTTP `429 Too Many Requests`
-  - ทุก Order ที่สร้างผ่าน API Key จะมี `api_key_id` และมี Log `QR_CREATED`
-- **Validation**: เขียน Unit Test ทดสอบ `PaymentService`
+  - คืน Response:
 
-### Task 5.3: Integrate Quota Deduction on Payment Paid in `WebhookService`
-- **Location**:
-  - `src/webhook/webhook.service.ts`
-  - `src/webhook/webhook.module.ts`
-- **Description**:
-  - ใน `WebhookService.matchAndMarkPaid(...)` ภายใน Transaction เดียวกับที่เปลี่ยนสถานะ `order.status = 'PAID'`:
-    - เรียก `subscriptionsService.deductQuotaOnPaid(order, manager)` เพื่อหักโควต้าของ Business ลง 1 (เพราะครบเงื่อนไข **สร้าง QR และ จ่ายเงินสำเร็จ**)
-    - หาก `order.api_key_id` มีค่า ให้สร้าง `ApiKeyUsageLog` (`api_key_id: order.api_key_id`, `business_id: order.business_id`, `payment_order_id: order.id`, `action: 'QR_PAID'`, `quota_deducted: deducted`)
-- **Dependencies**: Task 3.2, Task 5.2
+```json
+{
+  "range": { "from": "...", "to": "...", "interval": "day", "timezone": "Asia/Bangkok" },
+  "business": { "id": "...", "name": "Coffee Shop" },
+  "subscription": {
+    "id": "...",
+    "package_id": "...",
+    "package_code": "STARTER",
+    "package_name": "Starter",
+    "status": "ACTIVE",
+    "quota_limit": 1000,
+    "quota_used": 120,
+    "quota_remaining": 880,
+    "rate_limit_per_hour": 300,
+    "max_api_keys": 3,
+    "current_period_start": "...",
+    "current_period_end": "...",
+    "last_payment_at": "...",
+    "days_until_period_end": 20
+  },
+  "usage": {
+    "qr_created": 100,
+    "qr_paid": 80,
+    "quota_deducted": 80,
+    "paid_rate": 0.8
+  },
+  "transactions": {
+    "orders_created": 120,
+    "paid_count": 80,
+    "expired_count": 30,
+    "active_unverified_count": 10,
+    "gmv": 12345.67,
+    "average_order_value": 154.32,
+    "paid_rate": 0.72
+  },
+  "api_keys": { "used": 2, "active": 2, "max": 3 },
+  "rate_limit": {
+    "requests_last_hour": 12,
+    "limit": 300,
+    "remaining": 288,
+    "utilization": 0.04
+  },
+  "webhook": { "matched": 75 }
+}
+```
+
+  - `webhook.no_match` / `match_rate` **ไม่คืนสำหรับ business-scoped** เพราะไม่สามารถระบุเจ้าของ NO_MATCH ได้ (ดู Gotchas)
+  - ดึงข้อมูล:
+    - subscription + package ผ่าน `SubscriptionsService.getCurrentSubscription()` และ repository ของ `Package`
+    - usage จาก `api_key_usage_logs`
+    - transactions จาก `payment_orders`
+    - api keys จาก `api_keys`
+    - rate limit จาก usage log 60 นาทีล่าสุด
+    - webhook matched จาก `webhook_logs` join `payment_orders` ผ่าน `matched_order_id`
+  - ถ้าไม่มี subscription ให้ `subscription = null` และ quota-related เป็น `0` (ไม่ throw) เพื่อให้ Dashboard ยังแสดงกราฟ transactions ได้
+- **Dependencies**: Task 1.6
 - **Acceptance Criteria**:
-  - เมื่อ Order เปลี่ยนเป็น `PAID` โควต้าใน `business_subscriptions` จะถูกหัก 1 ทันที และมี `ApiKeyUsageLog` (`action = 'QR_PAID'`, `quota_deducted = true`)
-  - หาก Order หมดอายุ (`EXPIRED`) หรือยังไม่จ่าย จะไม่มีการหักโควต้า
-- **Validation**: เขียน Unit Test ทดสอบ `WebhookService`
+  - ตัวเลขทุกตัวเป็น number
+  - `paid_rate` ไม่เป็น NaN/Infinity
+  - Business role ถูก scope อัตโนมัติ
+- **Validation**: Unit Test ด้วย mock repositories
+
+### Task 2.2: Implement `getUsageTimeseries(user, query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - Query `api_key_usage_logs` ตาม `business_id`, `created_at in [from, to)`
+  - Metrics:
+    - `qr_created` → action `QR_CREATED`
+    - `qr_paid` → action `QR_PAID`
+    - `quota_deducted` → action `QR_PAID` AND `quota_deducted = true`
+  - Group by bucket
+  - Zero-fill bucket ด้วย `generateBuckets`
+  - Response:
+
+```json
+{
+  "range": { "...": "..." },
+  "series": [
+    {
+      "key": "qr_created",
+      "label": "QR Created",
+      "points": [
+        { "bucket_start": "2026-10-01T00:00:00.000Z", "label": "01 Oct", "value": 12 }
+      ]
+    }
+  ]
+}
+```
+
+- **Dependencies**: Task 1.5, 1.6
+- **Acceptance Criteria**:
+  - bucket ที่ไม่มีข้อมูลได้ `value: 0`
+  - `api_key_id` filter ทำงาน
+  - ไม่รวมข้อมูลข้าม business
+- **Validation**: Unit Test ตรวจ series length, zero-fill, filter
+
+### Task 2.3: Implement `getTransactionsTimeseries(user, query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - Query `payment_orders` ตาม business และ range
+  - คืน series หลายชุดใน Response เดียว:
+    - `orders_created`
+    - `paid_count`
+    - `expired_count`
+    - `gmv`
+    - `average_order_value`
+  - คืน `status_breakdown`:
+    - `PAID`
+    - `UNVERIFIED` (แยก active vs expired ตาม `expires_at`)
+    - `EXPIRED`
+  - ใช้ `created_at` สำหรับ orders/expired
+  - ใช้ `paid_at` สำหรับ paid/GMV
+  - GMV ต้องเป็น number (cast จาก numeric)
+- **Dependencies**: Task 2.1
+- **Acceptance Criteria**:
+  - Order ที่ `UNVERIFIED` แต่ `expires_at <= now` ถูกนับเป็น expired
+  - `average_order_value = 0` เมื่อไม่มี paid order
+  - GMV ไม่รวม order ที่ไม่ใช่ PAID
+- **Validation**: Unit Test ด้วย order ตัวอย่างครบทุกสถานะ
+
+### Task 2.4: Implement `getRateLimitStatus(user, query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - Query params: `hours?: number` default `24`, `@Min(1) @Max(168)` (เพิ่มใน DTO หรือใช้ `DashboardRangeQueryDto` + query แยก)
+  - คืน:
+    - `requests_last_hour` (sliding 60 นาที)
+    - `limit_per_hour` จาก subscription
+    - `remaining = max(0, limit - requests_last_hour)`
+    - `utilization = requests_last_hour / limit` (clamp 0..1)
+    - `series` รายชั่วโมงของ `QR_CREATED` ย้อนหลัง `hours`
+  - ถ้าไม่มี subscription ให้ `limit_per_hour = 0`, `utilization = 0`
+- **Dependencies**: Task 2.1
+- **Acceptance Criteria**:
+  - ใช้ sliding window 60 นาทีเหมือน `SubscriptionsService.assertQuotaAndRateLimit`
+  - ไม่มี division by zero
+- **Validation**: Unit Test ด้วย fake timers
+
+### Task 2.5: Create DashboardController business routes
+
+- **Location**: `src/dashboard/dashboard.controller.ts`
+- **Description**:
+  - `@Controller({ path: 'dashboard', version: '1' })`
+  - `@UseGuards(JwtAuthGuard, RoleGuard)` ระดับ Class
+  - Routes:
+    - `@Get('overview') @Roles('admin','business')`
+    - `@Get('usage/timeseries') @Roles('admin','business')`
+    - `@Get('transactions/timeseries') @Roles('admin','business')`
+    - `@Get('rate-limit') @Roles('admin','business')`
+  - ใช้ `@Req() request: Request & { user: AuthUser }`
+  - ไม่ต้อง wrap response เอง
+- **Dependencies**: Task 2.1–2.4
+- **Acceptance Criteria**:
+  - Route ตรงตาม API Surface
+  - Guard ทำงาน
+- **Validation**:
+  - `pnpm build`
+  - `src/dashboard/dashboard.module.spec.ts` boot controller ได้
 
 ---
 
-## Sprint 6: Testing, Quality Assurance & Mandatory Documentation Updates
+## Sprint 3: API Key & Subscription Analytics
 
-**Goal**: ทดสอบระบบทั้งหมด (Unit Tests, Lint, Build) และอัปเดตเอกสารบังคับของโปรเจกต์ (`AGENTS.md` และ `api-docs.html`)
+**Goal**: เพิ่มกราฟราย API Key และ Quota burn-down สำหรับ Business
+
 **Demo/Validation**:
-- `pnpm lint`, `pnpm test`, `pnpm build` ผ่านทั้งหมด 100%
-- `AGENTS.md` และ `api-docs.html` มีรายละเอียดตารางและ API ใหม่ครบถ้วน
+- Breakdown ราย Key แสดง QR Created / Paid / Share
+- Stacked timeseries แยกตาม Key
+- Quota trend รายวัน + ประวัติรอบบิล
 
-### Task 6.1: Comprehensive Unit Tests & Verification
-- **Location**: `src/**/*.spec.ts`
-- **Description**:
-  - ตรวจสอบและเพิ่ม Unit Tests ให้ครอบคลุม:
-    - `src/common/utils/datetime.util.spec.ts` (การคำนวณวันครบรอบรายเดือน `addMonthsClamped` รวมเคสวันสิ้นเดือน 28/29/30/31 และ `billing_cycle_months` มากกว่า 1)
-    - `src/packages/packages.service.spec.ts` (CRUD, `code` ซ้ำ, และการป้องกันการลบ Package ที่มี Subscription `ACTIVE`/`PAST_DUE`)
-    - `src/subscriptions/subscriptions.service.spec.ts` (Private function map package, `expireIfPastDue`, `renewSubscription`, `expireIfPastDue` ผ่าน Cron, Rate limit check, Quota deduction)
-    - `src/api-keys/api-keys.service.spec.ts` (การจำกัดจำนวน Key ตาม `max_api_keys`, ปฏิเสธเมื่อ Subscription `PAST_DUE`, Soft delete, Inactive, Usage tracking)
-    - `src/payment/payment.service.spec.ts` และ `src/webhook/webhook.service.spec.ts` (Quota/rate limit, การหักโควต้าเมื่อจ่ายสำเร็จ, ไม่หักเมื่อไม่จ่าย)
-  - **ข้อกำหนดการเขียน test ตาม `AGENTS.md`**:
-    - วางไฟล์ `*.spec.ts` ไว้ข้างไฟล์ที่ทดสอบ (colocated) และ mock dependency ภายนอกเสมอ (ห้ามต่อ DB/HTTP/env จริง)
-    - ใช้ `Test.createTestingModule` สำหรับ provider ที่มี DI
-    - ใช้ `jest.useFakeTimers()` / กำหนด `now` แบบ explicit เมื่อทดสอบ logic ที่เกี่ยวกับเวลา (`current_period_end`, Snapshot รอบบิล, rate limit 60 นาที)
-    - ครอบคลุม happy path, edge case (ค่าขอบ, ข้อมูลว่าง/ผิดรูปแบบ) และ error case (exception ที่คาดว่าจะถูก throw)
-    - หลีกเลี่ยงการ assert ค่าที่ไม่ deterministic ให้ใช้ `expect.any(String)` แทน
-    - **ห้ามลบ/แก้ script `pnpm test` ให้ถอด flag `node --experimental-vm-modules`** เพราะ NestJS v12 เป็น ESM-only
-  - รัน `pnpm lint`, `pnpm test`, และ `pnpm build`
-- **Dependencies**: Sprint 1–5
-- **Acceptance Criteria**:
-  - ทุก Test suite ผ่านทั้งหมด และไม่มี Warning/Error จาก `oxlint`
-- **Validation**: `pnpm lint && pnpm test && pnpm build`
+### Task 3.1: Implement `getApiKeyBreakdown(user, query)`
 
-### Task 6.2: Update `AGENTS.md` and `api-docs.html` (กฎเหล็กของโปรเจกต์)
-- **Location**:
-  - `AGENTS.md`
-  - `api-docs.html`
+- **Location**: `src/dashboard/dashboard.service.ts`
 - **Description**:
-  - อัปเดต `AGENTS.md`:
-    - อธิบายโครงสร้างตารางใหม่ (`packages`, `business_subscriptions`, `subscription_periods`, `api_keys`, `api_key_usage_logs`)
-    - อธิบาย Flow การสมัคร Business, การผูก Package, การสร้างหลาย API Key, การคิด Rate Limit ต่อชั่วโมง, การหักโควต้าเมื่อสร้าง QR + จ่ายเงินสำเร็จ
-    - อธิบาย **โมเดล Prepaid / Paid-through**: `current_period_end` คือวันจ่ายถึง, ไม่มี grace period, `PAST_DUE` = ยังไม่ชำระเงินรอบใหม่ (โควต้า 0 สร้าง QR ไม่ได้), และการได้โควต้าใหม่เกิดจาก `POST /subscriptions`, `POST /subscriptions/:id/renew` เท่านั้น
-    - อธิบาย Hourly Cron ที่ทำหน้าที่ **ตัดสิทธิ์** (`PAST_DUE`) ไม่ใช่รีเซ็ตโควต้า
-    - อัปเดตกฎการเขียน Unit Test (colocated `*.spec.ts`, jest ผ่าน `node --experimental-vm-modules`)
-  - อัปเดต `api-docs.html` (OpenAPI 3.0.3):
-    - อัปเดต Schema ของ `/api/v1/auth/register-business`
-    - เพิ่ม Tags, Paths, Request/Response Schemas สำหรับ `/api/v1/packages`, `/api/v1/subscriptions`, และ `/api/v1/api-keys` (รวมถึง Usage Tracking Endpoints)
-- **Dependencies**: Task 6.1
+  - Query `api_keys` ของ business (default `withDeleted: true`)
+  - Aggregate `api_key_usage_logs` ตาม `api_key_id`:
+    - `qr_created`
+    - `qr_paid`
+    - `quota_deducted`
+  - คืน:
+
+```json
+{
+  "range": { "...": "..." },
+  "summary": {
+    "total_keys": 3,
+    "active_keys": 2,
+    "revoked_keys": 1,
+    "max_api_keys": 3
+  },
+  "keys": [
+    {
+      "id": "...",
+      "name": "POS Terminal",
+      "key_prefix": "apay_live_1a2b3c4d",
+      "is_active": true,
+      "deleted_at": null,
+      "created_at": "...",
+      "last_used_at": "...",
+      "qr_created": 40,
+      "qr_paid": 38,
+      "quota_deducted": 38,
+      "share_of_created": 0.8,
+      "share_of_paid": 0.76
+    }
+  ]
+}
+```
+
+  - `share_of_*` = ค่าของ key / ผลรวมทุก key (ถ้าผลรวม = 0 ให้ 0)
+- **Dependencies**: Task 1.6
 - **Acceptance Criteria**:
-  - เอกสารทั้งสองไฟล์ตรงกับโค้ดและ DTO ล่าสุดทุกประการ
-- **Validation**: เปิดตรวจสอบ `AGENTS.md` และความถูกต้องของ JSON/YAML spec ใน `api-docs.html`
+  - Key ที่ถูก Soft Delete ยังแสดงใน breakdown
+  - Key ที่ไม่มี usage ได้ค่า 0
+  - ไม่คืน `key_hash` / `refresh_token_hash`
+- **Validation**: Unit Test ตรวจ share, deleted key, empty usage
+
+### Task 3.2: Implement `getApiKeyTimeseries(user, query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - Query usage logs group by `api_key_id` + bucket
+  - คืน series ต่อ Key (stacked bar):
+    - `key`: `api_key:<id>`
+    - `label`: `name (prefix)` หรือ `Deleted: name` ถ้า soft-delete
+    - `points`: zero-filled
+  - จำกัด top 10 keys ตามยอดรวมใน range และรวมที่เหลือเป็น series `other`
+  - รองรับ `api_key_id` filter
+- **Dependencies**: Task 3.1
+- **Acceptance Criteria**:
+  - จำนวน series ≤ 11 (top 10 + other)
+  - ทุก series มีจุดครบทุก bucket
+- **Validation**: Unit Test ตรวจ top 10 + other
+
+### Task 3.3: Implement `getSubscriptionTrend(user, query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - ใช้ subscription ปัจจุบัน + `subscription_periods`
+  - คืน:
+    - `current`: subscription summary
+    - `quota.daily`: ข้อมูลรายวันตั้งแต่ `current_period_start` ถึง `min(now, current_period_end)`
+      - `bucket_start`, `label`, `quota_deducted`, `cumulative_used`, `quota_remaining`
+      - `quota_remaining = max(0, quota_limit - cumulative_used)`
+    - `periods`: ประวัติรอบบิล `subscription_periods` เรียงใหม่ → เก่า พร้อม `utilization = quota_used / quota_limit`
+  - ถ้าไม่มี subscription → `current: null`, `quota.daily: []`, `periods: []`
+- **Dependencies**: Task 1.6
+- **Acceptance Criteria**:
+  - Cumulative ใช้เฉพาะ `QR_PAID` + `quota_deducted = true`
+  - ไม่ติดลบ
+- **Validation**: Unit Test ด้วย fake timers และ period ที่มี/ไม่มี usage
+
+### Task 3.4: Add controller routes for API Keys & Subscription
+
+- **Location**: `src/dashboard/dashboard.controller.ts`
+- **Description**:
+  - เพิ่ม:
+    - `@Get('api-keys')`
+    - `@Get('api-keys/timeseries')`
+    - `@Get('subscription')`
+  - `@Roles('admin','business')`
+- **Dependencies**: Task 3.1–3.3
+- **Acceptance Criteria**: Route ตรงตาม API Surface
+- **Validation**: `pnpm build`
 
 ---
 
-## Potential Risks & Gotchas (ข้อควรระวังสำหรับ AI Agent)
+## Sprint 4: Admin Platform Analytics
 
-1. **ลำดับการจดทะเบียนตารางใน `DatabaseSecurityService`**:
-   - ห้ามลืมเพิ่มชื่อตารางใหม่ทั้ง 5 ตารางใน `TABLES` ของ `src/database/database-security.service.ts` มิฉะนั้นตารางจะไม่มี Row Level Security (RLS) บน Supabase/PostgreSQL
-2. **การคำนวณวันครบรอบรายเดือน (End-of-Month Rollover)**:
-   - การใช้ `Date.setMonth()` ของ JavaScript โดยตรงในวันที่ 31 มกราคม จะทำให้กระโดดไปเป็นวันที่ 2 หรือ 3 มีนาคม ต้องใช้ฟังก์ชัน `addMonthsClamped` ที่ตรวจสอบจำนวนวันสูงสุดของเดือนปลายทางเสมอ
-3. **Race Condition ตอนตัดโควต้าใน Webhook**:
-   - ต้องใช้ `pessimistic_write` lock บนแถว `business_subscriptions` ภายใน Transaction เดียวกับ `matchAndMarkPaid` เพื่อป้องกันการตัดโควต้าผิดพลาดเมื่อมีรายการโอนเงินเข้าพร้อมกันหลายรายการ
-4. **การจัดการ API Key ที่ถูก Inactive หรือ Soft Delete**:
-   - เมื่อตั้ง `is_active = false` หรือสั่ง `DELETE` API Key ต้องล้าง `refresh_token_hash = null` ของ API Key นั้นด้วยเสมอ เพื่อป้องกันไม่ให้นำ Refresh Token เดิมมาขอ Access Token ใหม่ได้
-5. **ห้ามรีเซ็ตโควต้าให้เองเมื่อครบรอบบิล (Prepaid Model)**:
-   - Cron/Lazy Expiry ต้อง **ไม่** รีเซ็ต `quota_remaining` เด็ดขาด ให้ทำหน้าที่แค่เปลี่ยน `status = 'PAST_DUE'` และตั้ง `quota_remaining = 0`
-   - การรีเซ็ตโควต้าเกิดขึ้นได้เฉพาะ `applyPackageToSubscription()` (เรียกจาก `POST /subscriptions` และ `POST /subscriptions/:id/renew`) เท่านั้น เพื่อไม่ให้ลูกค้าที่ไม่ชำระเงินได้โควต้าฟรี
-6. **การต่ออายุต้องรักษาวันหมดอายุเดิม (Prepaid Continuity)**:
-   - ถ้าต่ออายุก่อนครบกำหนด ต้องตั้ง `period_start = current_period_end` เดิม (ไม่ใช่ `now`) มิฉะนั้นวันหมดอายุจะถูกดันเร็วขึ้นโดยไม่ตั้งใจ
-7. **Zero-day Order ที่ค้างอยู่ตอน Subscription หมดอายุ**:
-   - Order ที่สร้างไว้ก่อนหมดรอบยังสามารถถูกจับคู่เป็น `PAID` ได้ตามปกติ แต่ `deductQuotaOnPaid` จะคืน `false` (ไม่หักโควต้า) และ log `quota_deducted = false` — ต้องทดสอบเคสนี้ด้วย
+**Goal**: ให้ Admin ดูภาพรวมทั้ง Platform และตาราง Business ที่พร้อมใช้งาน
+
+**Demo/Validation**:
+- Admin overview คืนจำนวน Business / Subscription / GMV / Estimated MRR
+- ตาราง Business กรอง/เรียง/แบ่งหน้าได้
+- Distribution และ Expiring ใช้งานได้
+
+### Task 4.1: Implement `getAdminOverview(query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - คืน:
+
+```json
+{
+  "range": { "...": "..." },
+  "businesses": {
+    "total": 120,
+    "active": 110,
+    "new_in_range": 8
+  },
+  "subscriptions": {
+    "active": 90,
+    "past_due": 15,
+    "cancelled": 5,
+    "expiring_7d": 6,
+    "expiring_30d": 20
+  },
+  "platform": {
+    "orders_created": 2000,
+    "paid_count": 1500,
+    "expired_count": 300,
+    "active_unverified_count": 200,
+    "gmv": 250000.5,
+    "average_order_value": 166.67,
+    "paid_rate": 0.83,
+    "qr_created": 1800,
+    "qr_paid": 1450
+  },
+  "webhook": {
+    "matched": 1450,
+    "no_match": 120,
+    "match_rate": 0.9235
+  },
+  "estimated_mrr": 89900,
+  "estimated_arr": 1078800
+}
+```
+
+  - `qr_created` / `qr_paid` ใน platform ใช้ `api_key_usage_logs` (API-key usage)
+  - `orders_*` / `gmv` ใช้ `payment_orders`
+  - `estimated_mrr` = sum `packages.price` ของ subscription `ACTIVE`
+  - `webhook` ใช้ `webhook_logs` ทั้ง MATCHED และ NO_MATCH (Platform scope ทำได้)
+- **Dependencies**: Task 1.6
+- **Acceptance Criteria**:
+  - ตัวเลขทั้งหมดเป็น number
+  - ไม่รวม subscription ที่ soft-deleted
+- **Validation**: Unit Test ด้วย mock repositories
+
+### Task 4.2: Implement `getAdminTimeseries(query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - คืน series เดียวกันกับ bucket:
+    - `new_businesses` (`businesses.created_at`)
+    - `orders_created` (`payment_orders.created_at`)
+    - `paid_count` (`payment_orders.paid_at`)
+    - `gmv` (`payment_orders.paid_at`)
+    - `qr_created` (`api_key_usage_logs.action = 'QR_CREATED'`)
+    - `qr_paid` (`api_key_usage_logs.action = 'QR_PAID'`)
+  - Zero-fill ทุก series
+- **Dependencies**: Task 4.1
+- **Acceptance Criteria**:
+  - series ทุกตัวมีจำนวนจุดเท่ากัน
+  - ไม่มี bucket ขาด
+- **Validation**: Unit Test ตรวจ series count + zero-fill
+
+### Task 4.3: Implement `getAdminDistribution(query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - คืน:
+    - `packages`: [{ `package_id`, `code`, `name`, `price`, `business_count`, `active_count`, `past_due_count` }]
+    - `subscription_status`: [{ `status`, `count` }]
+    - `quota_utilization`: [{ `bucket`, `count` }] โดย bucket:
+      - `0-25`
+      - `26-50`
+      - `51-75`
+      - `76-100`
+      - `100+`
+  - `business_count` = จำนวน subscription ที่ไม่ soft-deleted ต่อ package
+  - Quota utilization ใช้ subscription `ACTIVE` + `PAST_DUE`
+  - คำนวณ percentage = `quota_used / quota_limit * 100`
+- **Dependencies**: Task 4.1
+- **Acceptance Criteria**:
+  - Package ที่ไม่มี subscription ยังแสดง `business_count = 0`
+  - ไม่มี division by zero
+- **Validation**: Unit Test ด้วย package/subscription ตัวอย่าง
+
+### Task 4.4: Implement `getAdminBusinesses(query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - ใช้ `AdminBusinessesQueryDto`
+  - Filters:
+    - `search` → `businesses.business_name ILIKE %search%`
+    - `package_id`
+    - `status` (`business_subscriptions.status`)
+  - Sort:
+    - `gmv`, `qr_created`, `qr_paid`, `quota_used`, `current_period_end`, `created_at`
+    - `sort_order` default `desc`
+  - Pagination:
+    - default `page=1`, `limit=20`, max 100
+  - Response:
+
+```json
+{
+  "range": { "...": "..." },
+  "pagination": { "page": 1, "limit": 20, "total": 120, "total_pages": 6 },
+  "items": [
+    {
+      "business_id": "...",
+      "business_name": "Coffee Shop",
+      "package_code": "STARTER",
+      "package_name": "Starter",
+      "subscription_status": "ACTIVE",
+      "quota_limit": 1000,
+      "quota_used": 120,
+      "quota_remaining": 880,
+      "current_period_end": "...",
+      "last_payment_at": "...",
+      "api_keys_used": 2,
+      "api_keys_max": 3,
+      "qr_created": 100,
+      "qr_paid": 80,
+      "gmv": 12345.67
+    }
+  ]
+}
+```
+
+  - Business ที่ไม่มี subscription ต้องยังแสดงในตาราง (subscription fields เป็น `null`)
+- **Dependencies**: Task 4.1, 4.2
+- **Acceptance Criteria**:
+  - Pagination ถูกต้อง
+  - Sort by aggregate ทำงาน
+  - Search case-insensitive
+  - ไม่คืนข้อมูลเกิน `limit`
+- **Validation**: Unit Test ด้วย query builder result / raw SQL mock
+
+### Task 4.5: Implement `getAdminExpiring(query)`
+
+- **Location**: `src/dashboard/dashboard.service.ts`
+- **Description**:
+  - Query `BusinessSubscription` สถานะ `ACTIVE` ที่ `current_period_end` อยู่ระหว่าง `now` ถึง `now + days`
+  - คืน:
+    - `expiring`: [{ `business_id`, `business_name`, `subscription_id`, `status`, `current_period_end`, `days_remaining`, `quota_remaining`, `quota_limit` }]
+    - `near_quota`: subscription สถานะ `ACTIVE`/`PAST_DUE` ที่ `quota_used / quota_limit >= quota_threshold`
+  - `days` default 7, max 90
+  - `quota_threshold` default 0.8
+- **Dependencies**: Task 4.1
+- **Acceptance Criteria**:
+  - เรียงตาม `current_period_end` / utilization มากไปน้อย
+  - ไม่มี division by zero
+- **Validation**: Unit Test
+
+### Task 4.6: Add admin controller routes
+
+- **Location**: `src/dashboard/dashboard.controller.ts`
+- **Description**:
+  - เพิ่ม:
+    - `@Get('admin/overview') @Roles('admin')`
+    - `@Get('admin/timeseries') @Roles('admin')`
+    - `@Get('admin/distribution') @Roles('admin')`
+    - `@Get('admin/businesses') @Roles('admin')`
+    - `@Get('admin/expiring') @Roles('admin')`
+  - Business role เรียก admin routes ต้องได้ `403`
+- **Dependencies**: Task 4.1–4.5
+- **Acceptance Criteria**: Route ตรงตาม API Surface
+- **Validation**: `pnpm build`
+
+---
+
+## Sprint 5: Tests, Documentation & Final Verification
+
+**Goal**: ครอบคลุม Unit Test, อัปเดตเอกสารบังคับ และตรวจคุณภาพทั้งโปรเจกต์
+
+### Task 5.1: Comprehensive Unit Tests
+
+- **Location**:
+  - `src/dashboard/dashboard.service.spec.ts`
+  - `src/dashboard/dashboard.module.spec.ts`
+  - `src/dashboard/utils/dashboard-bucket.util.spec.ts`
+- **Description**:
+  - `dashboard-bucket.util.spec.ts`:
+    - default range 30 วัน
+    - from > to → `BadRequestException`
+    - range > 365 วัน → `BadRequestException`
+    - hour range > 31 วัน → `BadRequestException`
+    - day/hour bucket count
+    - zero-fill boundary
+    - Bangkok midnight boundary
+    - label format
+  - `dashboard.service.spec.ts`:
+    - Mock `Repository`, `DataSource`, `SubscriptionsService`
+    - ใช้ `jest.useFakeTimers()` + `jest.setSystemTime()` สำหรับ metric ที่เกี่ยวกับ now/range
+    - ครอบคลุม:
+      - scope: business ต้องใช้ `user.businessId`, business อื่น → 404, admin ไม่ส่ง `business_id` → 400
+      - `getOverview`: subscription null/active, quota numbers, webhook matched only
+      - `getUsageTimeseries`: zero-fill, filter `api_key_id`
+      - `getTransactionsTimeseries`: paid/expired/unverified, GMV, AOV, paid_rate
+      - `getRateLimitStatus`: limit 0, utilization clamp
+      - `getApiKeyBreakdown`: soft-deleted key, share denominator 0
+      - `getApiKeyTimeseries`: top 10 + other
+      - `getSubscriptionTrend`: cumulative quota + clamp
+      - `getAdminOverview`: counts, MRR, match rate
+      - `getAdminTimeseries`: series length เท่ากัน
+      - `getAdminDistribution`: package/status/quota buckets
+      - `getAdminBusinesses`: search/filter/sort/pagination
+      - `getAdminExpiring`: days/threshold
+    - หลีกเลี่ยง assert ค่า timestamp ที่ไม่ deterministic ให้ใช้ `expect.any(String)` หรือ fixed fake time
+  - `dashboard.module.spec.ts`:
+    - Boot TestingModule ที่มี `DashboardController`, mock `DashboardService`, mock `UsersService`
+    - ยืนยันว่า Guard DI resolve ได้ (ไม่ต่อ DB)
+- **Dependencies**: Sprint 1–4
+- **Acceptance Criteria**:
+  - Test ผ่านทั้งหมด
+  - ไม่มี test ที่ต้องต่อ DB/HTTP/env จริง
+- **Validation**: `pnpm test`
+
+### Task 5.2: Update `AGENTS.md`
+
+- **Location**: `AGENTS.md`
+- **Description**:
+  - เพิ่ม Section `7. Dashboard Analytics (`src/dashboard/`)`
+  - อธิบาย:
+    - Endpoint ทั้งหมดและ Scope (`business` vs `admin`)
+    - Metric definitions หลัก
+    - Timezone `Asia/Bangkok` และ bucket rule
+    - Default range 30 วัน, max 365 วัน, hour interval max 31 วัน
+    - Index ที่เพิ่มเพื่อรองรับ Dashboard
+    - ข้อจำกัด:
+      - `webhook_logs` ไม่มี `business_id` → NO_MATCH ไม่สามารถ scope ต่อ Business ได้
+      - ยังไม่มี request log ของ 429/403
+      - MRR เป็น Estimated MRR จากราคาแพ็กเกจปัจจุบัน ไม่ใช่ invoice จริง
+      - Quota history ของรอบปัจจุบัน derive จาก usage logs
+  - อัปเดตกฎ Tests/Docs ตาม AGENTS.md เดิม
+- **Dependencies**: Task 5.1
+- **Acceptance Criteria**: เอกสารตรงกับ Endpoint/Schema ล่าสุด
+- **Validation**: ตรวจด้วยตาเปล่า + `pnpm lint`
+
+### Task 5.3: Update `api-docs.html`
+
+- **Location**: `api-docs.html`
+- **Description**:
+  - เพิ่ม Tag `Dashboard`
+  - เพิ่ม Paths ทั้ง 12 Endpoint:
+    - `/api/v1/dashboard/overview`
+    - `/api/v1/dashboard/usage/timeseries`
+    - `/api/v1/dashboard/transactions/timeseries`
+    - `/api/v1/dashboard/rate-limit`
+    - `/api/v1/dashboard/api-keys`
+    - `/api/v1/dashboard/api-keys/timeseries`
+    - `/api/v1/dashboard/subscription`
+    - `/api/v1/dashboard/admin/overview`
+    - `/api/v1/dashboard/admin/timeseries`
+    - `/api/v1/dashboard/admin/distribution`
+    - `/api/v1/dashboard/admin/businesses`
+    - `/api/v1/dashboard/admin/expiring`
+  - เพิ่ม Schemas:
+    - `DashboardRange`
+    - `DashboardSeriesPoint`
+    - `DashboardSeries`
+    - `DashboardOverviewData`
+    - `DashboardUsageTimeseriesData`
+    - `DashboardTransactionsTimeseriesData`
+    - `DashboardRateLimitData`
+    - `DashboardApiKeyBreakdownData`
+    - `DashboardApiKeyTimeseriesData`
+    - `DashboardSubscriptionTrendData`
+    - `AdminDashboardOverviewData`
+    - `AdminDashboardTimeseriesData`
+    - `AdminDashboardDistributionData`
+    - `AdminBusinessListData`
+    - `AdminExpiringData`
+    - `DashboardPagination`
+  - ระบุ `security: [{ BearerAuth: [] }]`, query params, 400/401/403/404 responses
+  - ใช้ `successEnvelope` helper เดิมในไฟล์
+- **Dependencies**: Task 5.2
+- **Acceptance Criteria**:
+  - JSON/JS spec valid
+  - `$ref` ทุกตัว resolve ได้
+  - เอกสารตรงกับ DTO/Response จริง
+- **Validation**:
+  - เปิด `api-docs.html` ตรวจ Swagger UI
+  - รัน script ตรวจ syntax/`$ref` (ดู pattern เดิมที่ใช้ในโปรเจกต์)
+
+### Task 5.4: Final Verification
+
+- **Location**: ทั้งโปรเจกต์
+- **Description**:
+  - รัน:
+
+```bash
+pnpm lint
+pnpm test
+pnpm build
+```
+
+  - ตรวจว่าไม่มี TypeScript error, lint warning, หรือ test fail
+  - ตรวจว่า `tsconfig.build.tsbuildinfo` ไม่ถูก commit โดยไม่ตั้งใจ
+- **Dependencies**: Task 5.1–5.3
+- **Acceptance Criteria**:
+  - ทั้ง 3 คำสั่งผ่าน 100%
+  - จำนวน Test suite เพิ่มขึ้นและผ่านทั้งหมด
+- **Validation**: แสดงผลลัพธ์ให้ผู้ใช้เห็น
+
+---
+
+## Testing Strategy
+
+- **Unit-first**: mock Repository/DataSource/SubscriptionsService ทั้งหมด
+- **Time control**: ใช้ `jest.useFakeTimers()` + `jest.setSystemTime()` สำหรับ range, rate limit, expiry
+- **SQL aggregation**: mock query builder chain หรือ mock `dataSource.query` ตามวิธีที่ implement
+- **Boundary tests**: เที่ยงคืนเวลาไทย, ต้นชั่วโมง, สิ้นเดือน, leap year
+- **Empty data**: ทุก Endpoint ต้องไม่ throw เมื่อไม่มีข้อมูล และคืน `0`/`[]`/`null` ตาม contract
+- **Scope tests**: business ต้องไม่เห็นข้อมูลร้านอื่น, admin ต้องเข้าถึงได้
+- **No DB/HTTP/env จริงใน unit test**
+
+---
+
+## Potential Risks & Gotchas
+
+1. **Guard DI ยังพังอยู่ถ้าไม่ทำ Task 1.1**
+   - `RoleGuard` inject `UsersService`; Module ที่ใช้ Guard ต้อง import `UsersModule`
+   - ห้าม import `AuthModule` เข้า `SubscriptionsModule` เพราะจะเกิด circular dependency
+
+2. **Timezone bucketing**
+   - ห้ามใช้ `new Date().toISOString().slice(0,10)` ตรงๆ เพราะเป็น UTC
+   - ต้องใช้ `AT TIME ZONE 'Asia/Bangkok'` ใน SQL และ `Intl.DateTimeFormat` ฝั่ง JS
+
+3. **Lazy Expiry ของ PaymentOrder**
+   - ระบบ mark `EXPIRED` แบบ lazy เฉพาะตอนสร้าง QR ใหม่
+   - Dashboard ต้องถือว่า `status = 'UNVERIFIED' AND expires_at <= now` เป็น expired
+
+4. **Webhook NO_MATCH ไม่มี business_id**
+   - `webhook_logs` ไม่มี `business_id`
+   - Business-scoped dashboard แสดงได้แค่ MATCHED ที่ join ผ่าน `matched_order_id`
+   - NO_MATCH / match_rate ให้แสดงเฉพาะ Admin
+
+5. **ไม่มี Invoice / Billing History**
+   - MRR/ARR เป็น **Estimated** จากราคาแพ็กเกจปัจจุบัน
+   - ห้ามLabel ว่าเป็นรายได้ที่เรียกเก็บจริง
+
+6. **ไม่มี 429/403 Log**
+   - ไม่สามารถทำกราฟ Throttling หรือ Error rate ของ Dashboard ได้ใน MVP
+
+7. **Quota History**
+   - `quota_remaining` ไม่ได้เก็บเป็นรายวัน
+   - ต้อง derive จาก `QR_PAID` + `quota_deducted = true` ตั้งแต่ `current_period_start`
+
+8. **Soft-deleted API Keys**
+   - Breakdown ต้องใช้ `withDeleted: true`
+   - Key ที่ถูกลบต้องไม่ถูกนับใน `active_keys` แต่ยังแสดง usage history
+
+9. **Division by Zero**
+   - `paid_rate`, `AOV`, `utilization`, `share_of_*`, `match_rate` ต้องกัน `0/0`
+   - Return `0` ไม่ใช่ `NaN`/`Infinity`
+
+10. **Performance**
+    - Query raw logs ใน range 365 วันอาจช้า
+    - ต้องมี Index ตาม Task 1.7
+    - ถ้าข้อมูลโตมาก ให้ทำ rollup ตาม Future Work
+
+11. **Half-open range**
+    - ใช้ `[from, to)` เพื่อไม่นับ bucket สุดท้ายซ้ำ
+    - ต้องทดสอบขอบเขต `23:59:59` และ `00:00:00`
+
+12. **Numeric cast**
+    - `SUM(total_amount)` จาก PostgreSQL อาจเป็น string
+    - ต้อง `Number(...)` หรือใช้ `numericTransformer`
+
+---
+
+## Future Work (ไม่อยู่ใน Task นี้)
+
+- เพิ่ม `request_logs` เพื่อเก็บ 429/403, endpoint, status code และ latency
+- เพิ่ม `subscription_invoices` เพื่อทำ Revenue/MRR จากข้อมูลจริง
+- เพิ่ม `subscription_events` เพื่อทำ Churn / PAST_DUE trend
+- เพิ่ม callback latency/retry fields
+- ทำ Daily Rollup Table หรือ Materialized View:
+  - `dashboard_daily_business_stats`
+  - `dashboard_daily_platform_stats`
+- เพิ่ม Redis cache สำหรับ Dashboard ที่ถูกเรียกบ่อย
+- Export CSV / Scheduled report
 
 ---
 
 ## Rollback Plan
 
-- หากต้องการย้อนกลับ:
-  1. คืนค่าคอลัมน์ใน `businesses` และ `payment_orders`
-  2. ถอด `PackagesModule`, `SubscriptionsModule`, `ApiKeysModule`, และ `ScheduleModule` ออกจาก `AppModule`
-  3. ลบตาราง `api_key_usage_logs`, `api_keys`, `subscription_periods`, `business_subscriptions`, `packages` ออกจาก schema `apay`
+1. ลบ `src/dashboard/` ทั้งโฟลเดอร์
+2. ถอด `DashboardModule` ออกจาก `AppModule`
+3. คืนค่า Index ที่เพิ่มใน Entity (ถ้าต้องการย้อน schema)
+4. คืนค่า `imports` ของ `PackagesModule`, `SubscriptionsModule`, `ApiKeysModule` (เฉพาะ Guard DI fix)
+5. Revert `AGENTS.md` และ `api-docs.html` ส่วน Dashboard
+6. รัน `pnpm lint && pnpm test && pnpm build` อีกครั้ง

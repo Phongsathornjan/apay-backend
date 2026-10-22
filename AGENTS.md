@@ -129,6 +129,32 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
   - If `order.api_key_id` is set, writes `api_key_usage_logs` (`action = 'QR_PAID'`, `quota_deducted` = result of the deduction). Orders created without an API key still deduct quota but skip the log.
   - Sends an HTTP `POST` callback (`event: 'payment.paid'`, 5s timeout) to `order.redirect_url`, recording `callback_sent` and `callback_status_code` on the order.
 
+### 7. Dashboard Analytics (`src/dashboard/`)
+- **Read-only Analytics APIs** for Frontend KPI cards and charts (`Asia/Bangkok` / `UTC+7` timezone). Guarded by `@UseGuards(JwtAuthGuard, RoleGuard)`. Any module using `RoleGuard` (`PackagesModule`, `SubscriptionsModule`, `ApiKeysModule`, `DashboardModule`) imports `UsersModule` so `RoleGuard` can resolve `UsersService` without circular dependencies.
+- **Range & Bucketing (`src/dashboard/utils/dashboard-bucket.util.ts`)**:
+  - Half-open range `[from, to)`. Default range = last 30 days (`to = now`, `from = now - 30d`), maximum 365 days (`400 BadRequestException` if `from > to`, `> 365d`, or `> 744` buckets).
+  - Supports `interval = 'day' | 'hour'` (`hour` requires range `<= 31` days).
+  - Day buckets align to `00:00` `Asia/Bangkok`; hour buckets align to the top of the hour in `Asia/Bangkok`. Empty buckets are always **zero-filled** and include both UTC `bucket_start` (ISO) and Bangkok `label` (e.g. `20 Oct` or `14:00`).
+- **Business-scoped Endpoints (`/api/v1/dashboard`, `@Roles('admin', 'business')`)**:
+  - Scope resolution: `business` callers are locked to their own `req.user.businessId` (passing another `business_id` throws `404`); `admin` callers must supply `?business_id=` (otherwise `400`).
+  - `GET /overview`: KPI summary (`business`, `subscription` with `days_until_period_end`, `usage`, `transactions`, `api_keys`, `rate_limit`, `webhook.matched`). Returns `subscription: null` (without throwing) if no subscription is assigned yet.
+  - `GET /usage/timeseries`: Zero-filled series for `qr_created`, `qr_paid`, `quota_deducted` (`metric` and `api_key_id` filters supported).
+  - `GET /transactions/timeseries`: Zero-filled series for `orders_created`, `paid_count`, `expired_count`, `gmv`, `average_order_value`, plus `status_breakdown` (`PAID`, `UNVERIFIED: { active, expired }`, `EXPIRED`). Orders with `status = 'UNVERIFIED'` and `expires_at <= now` are counted as expired.
+  - `GET /rate-limit`: Sliding 60-minute `requests_last_hour`, `limit_per_hour`, `remaining`, `utilization` (clamped `0..1`), and hourly `QR_CREATED` series (`hours` default `24`, max `168`).
+  - `GET /api-keys`: Per-key breakdown (`qr_created`, `qr_paid`, `quota_deducted`, `share_of_created`, `share_of_paid`, `include_deleted` default `true`; never exposes `key_hash`/`refresh_token_hash`).
+  - `GET /api-keys/timeseries`: Stacked timeseries per API key (capped at top 10 keys by volume in range + `other` series).
+  - `GET /subscription`: Current subscription summary, daily quota burn-down (`quota.daily` derived from `QR_PAID` with `quota_deducted = true` since `current_period_start`), and `subscription_periods` history with `utilization`.
+- **Admin Platform Endpoints (`/api/v1/dashboard/admin`, `@Roles('admin')`)**:
+  - `GET /admin/overview`: Platform-wide counts (`businesses`, `subscriptions` including `expiring_7d`/`expiring_30d`, `platform` orders/GMV/AOV/paid_rate/QR counts, `webhook` `matched`/`no_match`/`match_rate`, and `estimated_mrr` / `estimated_arr`).
+  - `GET /admin/timeseries`: Zero-filled platform series (`new_businesses`, `orders_created`, `paid_count`, `gmv`, `qr_created`, `qr_paid`).
+  - `GET /admin/distribution`: Package distribution (`business_count`, `active_count`, `past_due_count`), subscription status counts, and quota utilization buckets (`0-25`, `26-50`, `51-75`, `76-100`, `100+`).
+  - `GET /admin/businesses`: Paginated business table with `search` (case-insensitive `business_name`), `package_id`, `status`, `sort_by` (`gmv`, `qr_created`, `qr_paid`, `quota_used`, `current_period_end`, `created_at`), `sort_order`, `page`, `limit`. Businesses without a subscription are included with `null` subscription fields.
+  - `GET /admin/expiring`: `expiring` `ACTIVE` subscriptions within `days` (default `7`, max `90`) and `near_quota` subscriptions with `quota_used / quota_limit >= quota_threshold` (default `0.8`).
+- **Dashboard Indexes & Known Constraints**:
+  - Indexes added on existing entities: `idx_payment_orders_business_created`, `idx_payment_orders_business_paid`, `idx_webhook_logs_created`, `idx_webhook_logs_status_created`, `idx_businesses_created`, `idx_subscription_periods_business`.
+  - `webhook_logs` has no `business_id`, so `NO_MATCH` and `match_rate` are only available on Admin platform endpoints; business overview reports `webhook.matched` (joined via `matched_order_id`).
+  - Rejected `429`/`403` requests are not persisted in request logs, `estimated_mrr`/`estimated_arr` are estimated from active package prices (no invoice table yet), and daily quota history is derived from `api_key_usage_logs`.
+
 ## Required Environment Variables
 
 - `ENV`: Set to `development` to enable TypeORM `synchronize` (default off otherwise).

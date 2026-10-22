@@ -1,4 +1,5 @@
 allowBuilds:
   '@parcel/watcher': false
   bcrypt: true
+  ngrok: false
   unrs-resolver: false

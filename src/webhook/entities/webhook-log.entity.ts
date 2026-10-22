@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -17,6 +18,8 @@ export type WebhookProcessStatus =
   | 'IGNORED';
 
 @Entity({ schema: DB_SCHEMA, name: 'webhook_logs' })
+@Index('idx_webhook_logs_created', ['created_at'])
+@Index('idx_webhook_logs_status_created', ['process_status', 'created_at'])
 export class WebhookLog {
   @PrimaryGeneratedColumn('uuid')
   id: string;

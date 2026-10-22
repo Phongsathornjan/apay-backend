@@ -302,6 +302,10 @@
           description: "สร้าง/เปิด-ปิด/เพิกถอน API Key หลายรายการต่อ Business และดู Usage Tracking ราย Key"
         },
         {
+          name: "Dashboard",
+          description: "Read-only Analytics & Chart APIs สำหรับ Business Dashboard และ Admin Platform Dashboard (เวลา Asia/Bangkok)"
+        },
+        {
           name: "Webhooks",
           description: "รับแจ้งเตือนข้อความเงินเข้าจาก KBank LINE Webhook และส่ง Callback แจ้งผลการชำระเงิน"
         }
@@ -1604,6 +1608,551 @@
                 }
               }
             }
+          },
+          DashboardRange: {
+            type: "object",
+            required: ["from", "to", "interval", "timezone"],
+            properties: {
+              from: { type: "string", format: "date-time", example: "2026-09-20T10:00:00.000Z" },
+              to: { type: "string", format: "date-time", example: "2026-10-20T10:00:00.000Z" },
+              interval: { type: "string", enum: ["hour", "day"], example: "day" },
+              timezone: { type: "string", enum: ["Asia/Bangkok"], example: "Asia/Bangkok" }
+            }
+          },
+          DashboardSeriesPoint: {
+            type: "object",
+            required: ["bucket_start", "label", "value"],
+            properties: {
+              bucket_start: { type: "string", format: "date-time", example: "2026-10-19T17:00:00.000Z" },
+              label: { type: "string", example: "20 Oct" },
+              value: { type: "number", example: 12 }
+            }
+          },
+          DashboardSeries: {
+            type: "object",
+            required: ["key", "label", "points"],
+            properties: {
+              key: { type: "string", example: "qr_created" },
+              label: { type: "string", example: "QR Created" },
+              points: {
+                type: "array",
+                items: { $ref: "#/components/schemas/DashboardSeriesPoint" }
+              }
+            }
+          },
+          DashboardPagination: {
+            type: "object",
+            required: ["page", "limit", "total", "total_pages"],
+            properties: {
+              page: { type: "integer", example: 1 },
+              limit: { type: "integer", example: 20 },
+              total: { type: "integer", example: 120 },
+              total_pages: { type: "integer", example: 6 }
+            }
+          },
+          DashboardSubscriptionSummary: {
+            type: "object",
+            required: [
+              "id",
+              "package_id",
+              "package_code",
+              "package_name",
+              "status",
+              "quota_limit",
+              "quota_used",
+              "quota_remaining",
+              "rate_limit_per_hour",
+              "max_api_keys",
+              "current_period_start",
+              "current_period_end",
+              "last_payment_at",
+              "days_until_period_end"
+            ],
+            properties: {
+              id: { type: "string", format: "uuid", example: "e5f6a7b8-c9d0-1234-ef01-345678901234" },
+              package_id: { type: "string", format: "uuid", example: "c3d4e5f6-a7b8-9012-cdef-123456789012" },
+              package_code: { type: "string", nullable: true, example: "STARTER" },
+              package_name: { type: "string", nullable: true, example: "Starter" },
+              status: { type: "string", enum: ["ACTIVE", "PAST_DUE", "CANCELLED"], example: "ACTIVE" },
+              quota_limit: { type: "integer", example: 1000 },
+              quota_used: { type: "integer", example: 120 },
+              quota_remaining: { type: "integer", example: 880 },
+              rate_limit_per_hour: { type: "integer", example: 300 },
+              max_api_keys: { type: "integer", example: 3 },
+              current_period_start: { type: "string", format: "date-time", example: "2026-10-01T00:00:00.000Z" },
+              current_period_end: { type: "string", format: "date-time", example: "2026-11-01T00:00:00.000Z" },
+              last_payment_at: { type: "string", format: "date-time", nullable: true, example: "2026-10-01T00:00:00.000Z" },
+              days_until_period_end: { type: "integer", example: 12 }
+            }
+          },
+          DashboardOverviewData: {
+            type: "object",
+            required: ["range", "business", "subscription", "usage", "transactions", "api_keys", "rate_limit", "webhook"],
+            properties: {
+              range: { $ref: "#/components/schemas/DashboardRange" },
+              business: {
+                type: "object",
+                required: ["id", "name"],
+                properties: {
+                  id: { type: "string", format: "uuid", example: "b2c3d4e5-f6a7-8901-bcde-f12345678901" },
+                  name: { type: "string", example: "Coffee Shop" }
+                }
+              },
+              subscription: {
+                allOf: [{ $ref: "#/components/schemas/DashboardSubscriptionSummary" }],
+                nullable: true
+              },
+              usage: {
+                type: "object",
+                required: ["qr_created", "qr_paid", "quota_deducted", "paid_rate"],
+                properties: {
+                  qr_created: { type: "integer", example: 100 },
+                  qr_paid: { type: "integer", example: 80 },
+                  quota_deducted: { type: "integer", example: 80 },
+                  paid_rate: { type: "number", example: 0.8 }
+                }
+              },
+              transactions: {
+                type: "object",
+                required: ["orders_created", "paid_count", "expired_count", "active_unverified_count", "gmv", "average_order_value", "paid_rate"],
+                properties: {
+                  orders_created: { type: "integer", example: 120 },
+                  paid_count: { type: "integer", example: 80 },
+                  expired_count: { type: "integer", example: 30 },
+                  active_unverified_count: { type: "integer", example: 10 },
+                  gmv: { type: "number", example: 12345.67 },
+                  average_order_value: { type: "number", example: 154.32 },
+                  paid_rate: { type: "number", example: 0.7273 }
+                }
+              },
+              api_keys: {
+                type: "object",
+                required: ["used", "active", "max"],
+                properties: {
+                  used: { type: "integer", example: 2 },
+                  active: { type: "integer", example: 2 },
+                  max: { type: "integer", example: 3 }
+                }
+              },
+              rate_limit: {
+                type: "object",
+                required: ["requests_last_hour", "limit", "remaining", "utilization"],
+                properties: {
+                  requests_last_hour: { type: "integer", example: 12 },
+                  limit: { type: "integer", example: 300 },
+                  remaining: { type: "integer", example: 288 },
+                  utilization: { type: "number", example: 0.04 }
+                }
+              },
+              webhook: {
+                type: "object",
+                required: ["matched"],
+                properties: {
+                  matched: { type: "integer", example: 75 }
+                }
+              }
+            }
+          },
+          DashboardUsageTimeseriesData: {
+            type: "object",
+            required: ["range", "series"],
+            properties: {
+              range: { $ref: "#/components/schemas/DashboardRange" },
+              series: {
+                type: "array",
+                items: { $ref: "#/components/schemas/DashboardSeries" }
+              }
+            }
+          },
+          DashboardTransactionsTimeseriesData: {
+            type: "object",
+            required: ["range", "series", "status_breakdown"],
+            properties: {
+              range: { $ref: "#/components/schemas/DashboardRange" },
+              series: {
+                type: "array",
+                items: { $ref: "#/components/schemas/DashboardSeries" }
+              },
+              status_breakdown: {
+                type: "object",
+                required: ["PAID", "UNVERIFIED", "EXPIRED"],
+                properties: {
+                  PAID: { type: "integer", example: 80 },
+                  UNVERIFIED: {
+                    type: "object",
+                    required: ["active", "expired"],
+                    properties: {
+                      active: { type: "integer", example: 10 },
+                      expired: { type: "integer", example: 5 }
+                    }
+                  },
+                  EXPIRED: { type: "integer", example: 25 }
+                }
+              }
+            }
+          },
+          DashboardRateLimitData: {
+            type: "object",
+            required: ["business_id", "requests_last_hour", "limit_per_hour", "remaining", "utilization", "series"],
+            properties: {
+              business_id: { type: "string", format: "uuid", example: "b2c3d4e5-f6a7-8901-bcde-f12345678901" },
+              requests_last_hour: { type: "integer", example: 12 },
+              limit_per_hour: { type: "integer", example: 300 },
+              remaining: { type: "integer", example: 288 },
+              utilization: { type: "number", example: 0.04 },
+              series: {
+                type: "array",
+                items: { $ref: "#/components/schemas/DashboardSeriesPoint" }
+              }
+            }
+          },
+          DashboardApiKeyBreakdownData: {
+            type: "object",
+            required: ["range", "summary", "keys"],
+            properties: {
+              range: { $ref: "#/components/schemas/DashboardRange" },
+              summary: {
+                type: "object",
+                required: ["total_keys", "active_keys", "revoked_keys", "max_api_keys"],
+                properties: {
+                  total_keys: { type: "integer", example: 3 },
+                  active_keys: { type: "integer", example: 2 },
+                  revoked_keys: { type: "integer", example: 1 },
+                  max_api_keys: { type: "integer", example: 3 }
+                }
+              },
+              keys: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "id",
+                    "name",
+                    "key_prefix",
+                    "is_active",
+                    "deleted_at",
+                    "created_at",
+                    "last_used_at",
+                    "qr_created",
+                    "qr_paid",
+                    "quota_deducted",
+                    "share_of_created",
+                    "share_of_paid"
+                  ],
+                  properties: {
+                    id: { type: "string", format: "uuid" },
+                    name: { type: "string", example: "POS Terminal" },
+                    key_prefix: { type: "string", example: "apay_live_1a2b3c4d" },
+                    is_active: { type: "boolean", example: true },
+                    deleted_at: { type: "string", format: "date-time", nullable: true, example: null },
+                    created_at: { type: "string", format: "date-time" },
+                    last_used_at: { type: "string", format: "date-time", nullable: true },
+                    qr_created: { type: "integer", example: 40 },
+                    qr_paid: { type: "integer", example: 38 },
+                    quota_deducted: { type: "integer", example: 38 },
+                    share_of_created: { type: "number", example: 0.8 },
+                    share_of_paid: { type: "number", example: 0.76 }
+                  }
+                }
+              }
+            }
+          },
+          DashboardApiKeyTimeseriesData: {
+            type: "object",
+            required: ["range", "series"],
+            properties: {
+              range: { $ref: "#/components/schemas/DashboardRange" },
+              series: {
+                type: "array",
+                items: { $ref: "#/components/schemas/DashboardSeries" }
+              }
+            }
+          },
+          DashboardSubscriptionTrendData: {
+            type: "object",
+            required: ["current", "quota", "periods"],
+            properties: {
+              current: {
+                allOf: [{ $ref: "#/components/schemas/DashboardSubscriptionSummary" }],
+                nullable: true
+              },
+              quota: {
+                type: "object",
+                required: ["daily"],
+                properties: {
+                  daily: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      required: ["bucket_start", "label", "quota_deducted", "cumulative_used", "quota_remaining"],
+                      properties: {
+                        bucket_start: { type: "string", format: "date-time" },
+                        label: { type: "string", example: "20 Oct" },
+                        quota_deducted: { type: "integer", example: 10 },
+                        cumulative_used: { type: "integer", example: 120 },
+                        quota_remaining: { type: "integer", example: 880 }
+                      }
+                    }
+                  }
+                }
+              },
+              periods: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "id",
+                    "subscription_id",
+                    "business_id",
+                    "package_id",
+                    "period_start",
+                    "period_end",
+                    "quota_limit",
+                    "quota_used",
+                    "utilization",
+                    "created_at"
+                  ],
+                  properties: {
+                    id: { type: "string", format: "uuid" },
+                    subscription_id: { type: "string", format: "uuid" },
+                    business_id: { type: "string", format: "uuid" },
+                    package_id: { type: "string", format: "uuid" },
+                    period_start: { type: "string", format: "date-time" },
+                    period_end: { type: "string", format: "date-time" },
+                    quota_limit: { type: "integer", example: 1000 },
+                    quota_used: { type: "integer", example: 850 },
+                    utilization: { type: "number", example: 0.85 },
+                    created_at: { type: "string", format: "date-time" }
+                  }
+                }
+              }
+            }
+          },
+          AdminDashboardOverviewData: {
+            type: "object",
+            required: ["range", "businesses", "subscriptions", "platform", "webhook", "estimated_mrr", "estimated_arr"],
+            properties: {
+              range: { $ref: "#/components/schemas/DashboardRange" },
+              businesses: {
+                type: "object",
+                required: ["total", "active", "new_in_range"],
+                properties: {
+                  total: { type: "integer", example: 120 },
+                  active: { type: "integer", example: 110 },
+                  new_in_range: { type: "integer", example: 8 }
+                }
+              },
+              subscriptions: {
+                type: "object",
+                required: ["active", "past_due", "cancelled", "expiring_7d", "expiring_30d"],
+                properties: {
+                  active: { type: "integer", example: 90 },
+                  past_due: { type: "integer", example: 15 },
+                  cancelled: { type: "integer", example: 5 },
+                  expiring_7d: { type: "integer", example: 6 },
+                  expiring_30d: { type: "integer", example: 20 }
+                }
+              },
+              platform: {
+                type: "object",
+                required: [
+                  "orders_created",
+                  "paid_count",
+                  "expired_count",
+                  "active_unverified_count",
+                  "gmv",
+                  "average_order_value",
+                  "paid_rate",
+                  "qr_created",
+                  "qr_paid"
+                ],
+                properties: {
+                  orders_created: { type: "integer", example: 2000 },
+                  paid_count: { type: "integer", example: 1500 },
+                  expired_count: { type: "integer", example: 300 },
+                  active_unverified_count: { type: "integer", example: 200 },
+                  gmv: { type: "number", example: 250000.5 },
+                  average_order_value: { type: "number", example: 166.67 },
+                  paid_rate: { type: "number", example: 0.8333 },
+                  qr_created: { type: "integer", example: 1800 },
+                  qr_paid: { type: "integer", example: 1450 }
+                }
+              },
+              webhook: {
+                type: "object",
+                required: ["matched", "no_match", "match_rate"],
+                properties: {
+                  matched: { type: "integer", example: 1450 },
+                  no_match: { type: "integer", example: 120 },
+                  match_rate: { type: "number", example: 0.9235 }
+                }
+              },
+              estimated_mrr: { type: "number", example: 89900 },
+              estimated_arr: { type: "number", example: 1078800 }
+            }
+          },
+          AdminDashboardTimeseriesData: {
+            type: "object",
+            required: ["range", "series"],
+            properties: {
+              range: { $ref: "#/components/schemas/DashboardRange" },
+              series: {
+                type: "array",
+                items: { $ref: "#/components/schemas/DashboardSeries" }
+              }
+            }
+          },
+          AdminDashboardDistributionData: {
+            type: "object",
+            required: ["packages", "subscription_status", "quota_utilization"],
+            properties: {
+              packages: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["package_id", "code", "name", "price", "business_count", "active_count", "past_due_count"],
+                  properties: {
+                    package_id: { type: "string", format: "uuid" },
+                    code: { type: "string", example: "STARTER" },
+                    name: { type: "string", example: "Starter" },
+                    price: { type: "number", example: 499 },
+                    business_count: { type: "integer", example: 45 },
+                    active_count: { type: "integer", example: 40 },
+                    past_due_count: { type: "integer", example: 5 }
+                  }
+                }
+              },
+              subscription_status: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["status", "count"],
+                  properties: {
+                    status: { type: "string", enum: ["ACTIVE", "PAST_DUE", "CANCELLED"], example: "ACTIVE" },
+                    count: { type: "integer", example: 90 }
+                  }
+                }
+              },
+              quota_utilization: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: ["bucket", "count"],
+                  properties: {
+                    bucket: { type: "string", enum: ["0-25", "26-50", "51-75", "76-100", "100+"], example: "0-25" },
+                    count: { type: "integer", example: 50 }
+                  }
+                }
+              }
+            }
+          },
+          AdminBusinessListData: {
+            type: "object",
+            required: ["range", "pagination", "items"],
+            properties: {
+              range: { $ref: "#/components/schemas/DashboardRange" },
+              pagination: { $ref: "#/components/schemas/DashboardPagination" },
+              items: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "business_id",
+                    "business_name",
+                    "package_code",
+                    "package_name",
+                    "subscription_status",
+                    "quota_limit",
+                    "quota_used",
+                    "quota_remaining",
+                    "current_period_end",
+                    "last_payment_at",
+                    "api_keys_used",
+                    "api_keys_max",
+                    "qr_created",
+                    "qr_paid",
+                    "gmv"
+                  ],
+                  properties: {
+                    business_id: { type: "string", format: "uuid" },
+                    business_name: { type: "string", example: "Coffee Shop" },
+                    package_code: { type: "string", nullable: true, example: "STARTER" },
+                    package_name: { type: "string", nullable: true, example: "Starter" },
+                    subscription_status: { type: "string", enum: ["ACTIVE", "PAST_DUE", "CANCELLED"], nullable: true, example: "ACTIVE" },
+                    quota_limit: { type: "integer", nullable: true, example: 1000 },
+                    quota_used: { type: "integer", nullable: true, example: 120 },
+                    quota_remaining: { type: "integer", nullable: true, example: 880 },
+                    current_period_end: { type: "string", format: "date-time", nullable: true },
+                    last_payment_at: { type: "string", format: "date-time", nullable: true },
+                    api_keys_used: { type: "integer", example: 2 },
+                    api_keys_max: { type: "integer", nullable: true, example: 3 },
+                    qr_created: { type: "integer", example: 100 },
+                    qr_paid: { type: "integer", example: 80 },
+                    gmv: { type: "number", example: 12345.67 }
+                  }
+                }
+              }
+            }
+          },
+          AdminExpiringData: {
+            type: "object",
+            required: ["expiring", "near_quota"],
+            properties: {
+              expiring: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "business_id",
+                    "business_name",
+                    "subscription_id",
+                    "status",
+                    "current_period_end",
+                    "days_remaining",
+                    "quota_remaining",
+                    "quota_limit"
+                  ],
+                  properties: {
+                    business_id: { type: "string", format: "uuid" },
+                    business_name: { type: "string", example: "Coffee Shop" },
+                    subscription_id: { type: "string", format: "uuid" },
+                    status: { type: "string", enum: ["ACTIVE", "PAST_DUE", "CANCELLED"], example: "ACTIVE" },
+                    current_period_end: { type: "string", format: "date-time" },
+                    days_remaining: { type: "integer", example: 3 },
+                    quota_remaining: { type: "integer", example: 200 },
+                    quota_limit: { type: "integer", example: 1000 }
+                  }
+                }
+              },
+              near_quota: {
+                type: "array",
+                items: {
+                  type: "object",
+                  required: [
+                    "business_id",
+                    "business_name",
+                    "subscription_id",
+                    "status",
+                    "current_period_end",
+                    "quota_used",
+                    "quota_limit",
+                    "quota_remaining",
+                    "utilization"
+                  ],
+                  properties: {
+                    business_id: { type: "string", format: "uuid" },
+                    business_name: { type: "string", example: "Coffee Shop" },
+                    subscription_id: { type: "string", format: "uuid" },
+                    status: { type: "string", enum: ["ACTIVE", "PAST_DUE", "CANCELLED"], example: "ACTIVE" },
+                    current_period_end: { type: "string", format: "date-time" },
+                    quota_used: { type: "integer", example: 900 },
+                    quota_limit: { type: "integer", example: 1000 },
+                    quota_remaining: { type: "integer", example: 100 },
+                    utilization: { type: "number", example: 0.9 }
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -2579,6 +3128,244 @@
               }),
               "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
               "404": errorResponse("ไม่พบ API Key หรือไม่ได้เป็นของธุรกิจผู้เรียก", "API key not found")
+            }
+          }
+        },
+        "/api/v1/dashboard/overview": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "สรุป KPI และสถานะแพ็กเกจของ Business",
+            description: "Business เรียกดูข้อมูลของตัวเองได้โดยไม่ต้องส่ง `business_id` ส่วน Admin ต้องระบุ `business_id` เสมอ",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "from", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "to", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "interval", in: "query", required: false, schema: { type: "string", enum: ["hour", "day"], default: "day" } },
+              { name: "business_id", in: "query", required: false, description: "บังคับสำหรับ Admin", schema: { type: "string", format: "uuid" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/DashboardOverviewData" }),
+              "400": errorResponse("ช่วงวันที่ไม่ถูกต้อง หรือ Admin ไม่ได้ระบุ business_id"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found")
+            }
+          }
+        },
+        "/api/v1/dashboard/usage/timeseries": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "กราฟ Timeseries การใช้งาน QR Created / QR Paid / Quota Deducted",
+            description: "คืนข้อมูลแบบ zero-fill ทุก bucket ตามเวลา `Asia/Bangkok`",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "from", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "to", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "interval", in: "query", required: false, schema: { type: "string", enum: ["hour", "day"], default: "day" } },
+              { name: "metric", in: "query", required: false, schema: { type: "string", enum: ["qr_created", "qr_paid", "quota_deducted"] } },
+              { name: "api_key_id", in: "query", required: false, schema: { type: "string", format: "uuid" } },
+              { name: "business_id", in: "query", required: false, schema: { type: "string", format: "uuid" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/DashboardUsageTimeseriesData" }),
+              "400": errorResponse("พารามิเตอร์ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found")
+            }
+          }
+        },
+        "/api/v1/dashboard/transactions/timeseries": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "กราฟ Timeseries คำสั่งซื้อ / ยอดชำระ / GMV / AOV และสัดส่วนสถานะ",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "from", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "to", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "interval", in: "query", required: false, schema: { type: "string", enum: ["hour", "day"], default: "day" } },
+              { name: "business_id", in: "query", required: false, schema: { type: "string", format: "uuid" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/DashboardTransactionsTimeseriesData" }),
+              "400": errorResponse("พารามิเตอร์ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found")
+            }
+          }
+        },
+        "/api/v1/dashboard/rate-limit": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "สถานะ Rate Limit 60 นาทีล่าสุด และกราฟรายชั่วโมงย้อนหลัง",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "hours", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 168, default: 24 } },
+              { name: "business_id", in: "query", required: false, schema: { type: "string", format: "uuid" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/DashboardRateLimitData" }),
+              "400": errorResponse("พารามิเตอร์ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found")
+            }
+          }
+        },
+        "/api/v1/dashboard/api-keys": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "สัดส่วนการใช้งานแยกตาม API Key (รวม Key ที่ถูก Soft Delete)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "from", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "to", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "include_deleted", in: "query", required: false, schema: { type: "boolean", default: true } },
+              { name: "business_id", in: "query", required: false, schema: { type: "string", format: "uuid" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/DashboardApiKeyBreakdownData" }),
+              "400": errorResponse("พารามิเตอร์ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found")
+            }
+          }
+        },
+        "/api/v1/dashboard/api-keys/timeseries": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "Stacked Timeseries การใช้งานแยกตาม API Key (Top 10 + Other)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "from", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "to", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "interval", in: "query", required: false, schema: { type: "string", enum: ["hour", "day"], default: "day" } },
+              { name: "metric", in: "query", required: false, schema: { type: "string", enum: ["qr_created", "qr_paid", "quota_deducted"], default: "qr_created" } },
+              { name: "api_key_id", in: "query", required: false, schema: { type: "string", format: "uuid" } },
+              { name: "include_deleted", in: "query", required: false, schema: { type: "boolean", default: true } },
+              { name: "business_id", in: "query", required: false, schema: { type: "string", format: "uuid" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/DashboardApiKeyTimeseriesData" }),
+              "400": errorResponse("พารามิเตอร์ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found")
+            }
+          }
+        },
+        "/api/v1/dashboard/subscription": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "แนวโน้มการใช้โควต้ารายวัน (Burn-down) และประวัติรอบบิล",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "business_id", in: "query", required: false, schema: { type: "string", format: "uuid" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/DashboardSubscriptionTrendData" }),
+              "400": errorResponse("พารามิเตอร์ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "404": errorResponse("ไม่พบบัญชีธุรกิจ", "Business not found")
+            }
+          }
+        },
+        "/api/v1/dashboard/admin/overview": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "ภาพรวมทั้ง Platform สำหรับ Admin (KPI, GMV, Webhook Match Rate, Estimated MRR/ARR)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "from", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "to", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "interval", in: "query", required: false, schema: { type: "string", enum: ["hour", "day"], default: "day" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/AdminDashboardOverviewData" }),
+              "400": errorResponse("ช่วงวันที่ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("เฉพาะ Admin เท่านั้น", "Insufficient role permissions")
+            }
+          }
+        },
+        "/api/v1/dashboard/admin/timeseries": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "กราฟ Timeseries ภาพรวมทั้ง Platform (เฉพาะ Admin)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "from", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "to", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "interval", in: "query", required: false, schema: { type: "string", enum: ["hour", "day"], default: "day" } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/AdminDashboardTimeseriesData" }),
+              "400": errorResponse("ช่วงวันที่ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("เฉพาะ Admin เท่านั้น", "Insufficient role permissions")
+            }
+          }
+        },
+        "/api/v1/dashboard/admin/distribution": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "สัดส่วนแพ็กเกจ, สถานะ Subscription และการใช้โควต้า (เฉพาะ Admin)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/AdminDashboardDistributionData" }),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("เฉพาะ Admin เท่านั้น", "Insufficient role permissions")
+            }
+          }
+        },
+        "/api/v1/dashboard/admin/businesses": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "ตารางรายชื่อ Business พร้อม Usage, Quota, GMV และการกรอง/เรียงลำดับ (เฉพาะ Admin)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "from", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "to", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+              { name: "search", in: "query", required: false, schema: { type: "string", maxLength: 150 } },
+              { name: "package_id", in: "query", required: false, schema: { type: "string", format: "uuid" } },
+              { name: "status", in: "query", required: false, schema: { type: "string", enum: ["ACTIVE", "PAST_DUE", "CANCELLED"] } },
+              { name: "sort_by", in: "query", required: false, schema: { type: "string", enum: ["gmv", "qr_created", "qr_paid", "quota_used", "current_period_end", "created_at"], default: "created_at" } },
+              { name: "sort_order", in: "query", required: false, schema: { type: "string", enum: ["asc", "desc"], default: "desc" } },
+              { name: "page", in: "query", required: false, schema: { type: "integer", minimum: 1, default: 1 } },
+              { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 100, default: 20 } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/AdminBusinessListData" }),
+              "400": errorResponse("พารามิเตอร์ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("เฉพาะ Admin เท่านั้น", "Insufficient role permissions")
+            }
+          }
+        },
+        "/api/v1/dashboard/admin/expiring": {
+          get: {
+            tags: ["Dashboard"],
+            summary: "รายการ Business ที่ใกล้หมดอายุรอบบิลหรือใกล้หมดโควต้า (เฉพาะ Admin)",
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" },
+              { name: "days", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 90, default: 7 } },
+              { name: "quota_threshold", in: "query", required: false, schema: { type: "number", minimum: 0, maximum: 1, default: 0.8 } }
+            ],
+            responses: {
+              "200": successEnvelope({ $ref: "#/components/schemas/AdminExpiringData" }),
+              "400": errorResponse("พารามิเตอร์ไม่ถูกต้อง"),
+              "401": errorResponse("ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง"),
+              "403": errorResponse("เฉพาะ Admin เท่านั้น", "Insufficient role permissions")
             }
           }
         },

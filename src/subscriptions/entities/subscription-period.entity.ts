@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -13,6 +14,7 @@ import { BusinessSubscription } from './business-subscription.entity';
  * Snapshot ของแต่ละรอบบิล (เก็บไว้ก่อนโควต้าถูกรีเซ็ตหรือหมดอายุ)
  */
 @Entity({ schema: DB_SCHEMA, name: 'subscription_periods' })
+@Index('idx_subscription_periods_business', ['business_id', 'created_at'])
 export class SubscriptionPeriod {
   @PrimaryGeneratedColumn('uuid')
   id: string;

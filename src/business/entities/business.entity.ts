@@ -12,6 +12,7 @@ import { User } from '../../users/entities/user.entity';
 import { DB_SCHEMA } from '../../database/database.schema';
 
 @Entity({ schema: DB_SCHEMA, name: 'businesses' })
+@Index('idx_businesses_created', ['created_at'])
 export class Business {
   @PrimaryGeneratedColumn('uuid')
   id: string;

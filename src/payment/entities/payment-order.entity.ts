@@ -18,6 +18,8 @@ export type PaymentOrderStatus = 'UNVERIFIED' | 'PAID' | 'EXPIRED';
 @Entity({ schema: DB_SCHEMA, name: 'payment_orders' })
 @Index('idx_payment_orders_lookup', ['lookup_key', 'status', 'expires_at'])
 @Index('idx_payment_orders_business', ['business_id', 'status', 'expires_at'])
+@Index('idx_payment_orders_business_created', ['business_id', 'created_at'])
+@Index('idx_payment_orders_business_paid', ['business_id', 'paid_at'])
 export class PaymentOrder {
   @PrimaryColumn({ type: 'varchar', length: 64 })
   id: string;

@@ -11,6 +11,7 @@ import { AuthModule } from './auth/auth.module';
 import { BusinessModule } from './business/business.module';
 import { DatabaseModule } from './database/database.module';
 import { DB_SCHEMA } from './database/database.schema';
+import { DashboardModule } from './dashboard/dashboard.module';
 import { PackagesModule } from './packages/packages.module';
 import { PaymentModule } from './payment/payment.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
@@ -67,6 +68,7 @@ import { LoggerInterceptor } from './common/interceptor/logger.interceptor';
     ApiKeysModule,
     PaymentModule,
     WebhookModule,
+    DashboardModule,
     DatabaseModule,
   ],
   controllers: [AppController],
