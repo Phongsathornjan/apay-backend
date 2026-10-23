@@ -4,7 +4,6 @@
   "description": "",
   "author": "",
   "private": true,
-  "type": "module",
   "engines": {
     "node": ">=22.12.0"
   },
