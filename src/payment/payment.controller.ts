@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RoleGuard } from '../auth/guards/role.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuthUser } from '../auth/types/auth-user.type';
+import { RoleEnum } from '../enums';
 import { CreateQrDto } from './dto/create-qr.dto';
 import { PaymentService } from './payment.service';
 
@@ -20,12 +21,12 @@ import { PaymentService } from './payment.service';
   path: 'payments',
   version: '1',
 })
+@UseGuards(JwtAuthGuard, RoleGuard)
 export class PaymentController {
   constructor(private readonly paymentService: PaymentService) {}
 
   @Post('qr')
-  @UseGuards(JwtAuthGuard, RoleGuard)
-  @Roles('business', 'admin')
+  @Roles(RoleEnum.BUSINESS, RoleEnum.ADMIN)
   createQr(
     @Req() request: Request & { user: AuthUser },
     @Body() dto: CreateQrDto,
@@ -34,7 +35,7 @@ export class PaymentController {
   }
 
   @Get('orders/:id')
-  @UseGuards(JwtAuthGuard)
+  @Roles(RoleEnum.BUSINESS, RoleEnum.ADMIN)
   async getOrder(
     @Req() request: Request & { user: AuthUser },
     @Param('id') id: string,
@@ -42,9 +43,8 @@ export class PaymentController {
     const order = await this.paymentService.getOrderOrFail(id);
 
     if (
-      request.user.role === 'business' &&
-      request.user.businessId &&
-      order.business_id !== request.user.businessId
+      request.user.role === RoleEnum.BUSINESS &&
+      (!request.user.businessId || order.business_id !== request.user.businessId)
     ) {
       throw new NotFoundException('Payment order not found');
     }

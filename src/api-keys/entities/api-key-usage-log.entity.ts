@@ -9,9 +9,10 @@ import {
 } from 'typeorm';
 import { Business } from '../../business/entities/business.entity';
 import { DB_SCHEMA } from '../../database/database.schema';
+import type { ApiKeyUsageAction } from '../../enums/api-key-usage-action.enum';
 import { ApiKey } from './api-key.entity';
 
-export type ApiKeyUsageAction = 'QR_CREATED' | 'QR_PAID';
+export type { ApiKeyUsageAction };
 
 /**
  * ประวัติการใช้งาน API Key (ใช้คิด Rate Limit ต่อชั่วโมงและสรุป Usage)

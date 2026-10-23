@@ -1,4 +1,42 @@
-import { addMonthsClamped } from './datetime.util';
+import {
+  addMonthsClamped,
+  bangkokDateTimeToUtc,
+  convertBuddhistYearToCE,
+  getBangkokParts,
+} from './datetime.util';
+
+describe('datetime.util', () => {
+  describe('getBangkokParts', () => {
+    it('extracts YYYYMMDD and HHmmss in Asia/Bangkok (UTC+7)', () => {
+      const date = new Date('2026-10-19T18:05:09.000Z'); // 2026-10-20 01:05:09+07:00
+      expect(getBangkokParts(date)).toEqual({
+        dateStr: '20261020',
+        timeStr: '010509',
+      });
+    });
+  });
+
+  describe('convertBuddhistYearToCE', () => {
+    it('converts 4-digit Buddhist Era year to CE', () => {
+      expect(convertBuddhistYearToCE(2569)).toBe(2026);
+    });
+
+    it('converts 2-digit Buddhist Era year to CE', () => {
+      expect(convertBuddhistYearToCE(69)).toBe(2026);
+    });
+
+    it('returns CE year as-is when already in 4-digit CE range', () => {
+      expect(convertBuddhistYearToCE(2026)).toBe(2026);
+    });
+  });
+
+  describe('bangkokDateTimeToUtc', () => {
+    it('creates a UTC Date corresponding to the given Bangkok date/time', () => {
+      const utc = bangkokDateTimeToUtc(2026, 10, 18, 14, 32, 0);
+      expect(utc.toISOString()).toBe('2026-10-18T07:32:00.000Z');
+    });
+  });
+});
 
 describe('addMonthsClamped', () => {
   it('adds one month while keeping the same day and time', () => {

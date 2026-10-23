@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { BusinessSubscriptionStatusEnum } from '../enums/business-subscription-status.enum';
 import { BusinessSubscription } from '../subscriptions/entities/business-subscription.entity';
 import { CreatePackageDto } from './dto/create-package.dto';
 import { UpdatePackageDto } from './dto/update-package.dto';
@@ -92,7 +93,10 @@ export class PackagesService {
     const activeSubscriptions = await this.subscriptionsRepository.count({
       where: {
         package_id: pkg.id,
-        status: In(['ACTIVE', 'PAST_DUE']),
+        status: In([
+          BusinessSubscriptionStatusEnum.ACTIVE,
+          BusinessSubscriptionStatusEnum.PAST_DUE,
+        ]),
       },
     });
 

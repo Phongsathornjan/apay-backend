@@ -15,6 +15,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RoleGuard } from '../auth/guards/role.guard';
 import { AuthUser } from '../auth/types/auth-user.type';
+import { RoleEnum } from '../enums';
 import { CreatePackageDto } from './dto/create-package.dto';
 import { UpdatePackageDto } from './dto/update-package.dto';
 import { PackagesService } from './packages.service';
@@ -28,37 +29,37 @@ export class PackagesController {
   constructor(private readonly packagesService: PackagesService) {}
 
   @Post()
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   create(@Body() dto: CreatePackageDto) {
     return this.packagesService.create(dto);
   }
 
   @Get()
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   findAll(
     @Req() request: Request & { user: AuthUser },
     @Query('only_active') onlyActive?: string,
   ) {
     const activeOnly =
-      request.user.role === 'business' ? true : onlyActive === 'true';
+      request.user.role === RoleEnum.BUSINESS ? true : onlyActive === 'true';
 
     return this.packagesService.findAll(activeOnly);
   }
 
   @Get(':id')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   findOne(@Param('id') id: string) {
     return this.packagesService.findByIdOrFail(id);
   }
 
   @Patch(':id')
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   update(@Param('id') id: string, @Body() dto: UpdatePackageDto) {
     return this.packagesService.update(id, dto);
   }
 
   @Delete(':id')
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   remove(@Param('id') id: string) {
     return this.packagesService.softDelete(id);
   }

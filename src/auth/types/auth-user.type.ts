@@ -1,4 +1,6 @@
-export type UserRole = 'admin' | 'business';
+import type { UserRole } from '../../enums/role.enum';
+
+export type { UserRole };
 
 /**
  * โครงสร้างข้อมูลผู้ใช้ที่ถูกแนบมากับ `req.user` หลังผ่าน JwtStrategy.validate()

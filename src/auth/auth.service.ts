@@ -15,6 +15,7 @@ import { Business } from '../business/entities/business.entity';
 import { BusinessService } from '../business/business.service';
 import { safeCompare, sha256 } from '../common/utils/crypto.util';
 import { durationToSeconds } from '../common/utils/duration.util';
+import { RoleEnum } from '../enums/role.enum';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { Role } from '../users/entities/role.entity';
 import { User } from '../users/entities/user.entity';
@@ -82,7 +83,7 @@ export class AuthService {
     const role = user.role.name as UserRole;
     let businessId: string | null = null;
 
-    if (role === 'business') {
+    if (role === RoleEnum.BUSINESS) {
       const business = await this.businessService.findByUserId(user.id);
 
       if (!business || !business.is_active) {
@@ -122,7 +123,7 @@ export class AuthService {
    * เมื่อ Business มี Subscription ที่ ACTIVE แล้ว)
    */
   async registerBusiness(dto: RegisterBusinessDto) {
-    const result = await this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction(async (manager) => {
       const usersRepository = manager.getRepository(User);
       const rolesRepository = manager.getRepository(Role);
       const businessesRepository = manager.getRepository(Business);
@@ -136,7 +137,7 @@ export class AuthService {
       }
 
       const businessRole = await rolesRepository.findOne({
-        where: { name: 'business' },
+        where: { name: RoleEnum.BUSINESS },
       });
 
       if (!businessRole) {
@@ -168,24 +169,27 @@ export class AuthService {
         }),
       );
 
+      /**
+       * ผูก Package ใน Transaction เดียวกัน — หาก Package ไม่พร้อมใช้งาน
+       * (เช่น ถูกปิด/ไม่มีอยู่) การสร้าง User และ Business จะถูก Rollback ทั้งหมด
+       */
+      if (dto.package_id) {
+        await this.subscriptionsService.assignOrChangePackage(
+          business.id,
+          dto.package_id,
+          manager,
+        );
+      }
+
       return {
         user_id: user.id,
         username: user.username,
-        role: 'business' as UserRole,
+        role: RoleEnum.BUSINESS,
         business_id: business.id,
         business_name: business.business_name,
         promptpay_id: business.promptpay_id,
       };
     });
-
-    if (dto.package_id) {
-      await this.subscriptionsService.assignOrChangePackage(
-        result.business_id,
-        dto.package_id,
-      );
-    }
-
-    return result;
   }
 
   /**
@@ -225,7 +229,7 @@ export class AuthService {
     const tokens = await this.signTokenBundle({
       userId: business.user_id,
       username: business.user.username,
-      role: 'business',
+      role: RoleEnum.BUSINESS,
       businessId: business.id,
       apiKeyId: apiKeyRecord.id,
     });
@@ -264,7 +268,7 @@ export class AuthService {
     const role = user.role.name as UserRole;
     let business: Business | null = null;
 
-    if (role === 'business') {
+    if (role === RoleEnum.BUSINESS) {
       business = await this.businessService.findByUserId(user.id);
 
       if (!business || !business.is_active) {

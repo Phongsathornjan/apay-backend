@@ -12,8 +12,12 @@ import { ApiKey } from '../../api-keys/entities/api-key.entity';
 import { Business } from '../../business/entities/business.entity';
 import { numericTransformer } from '../../common/transformers/numeric.transformer';
 import { DB_SCHEMA } from '../../database/database.schema';
+import {
+  PaymentOrderStatusEnum,
+  type PaymentOrderStatus,
+} from '../../enums/payment-order-status.enum';
 
-export type PaymentOrderStatus = 'UNVERIFIED' | 'PAID' | 'EXPIRED';
+export type { PaymentOrderStatus };
 
 @Entity({ schema: DB_SCHEMA, name: 'payment_orders' })
 @Index('idx_payment_orders_lookup', ['lookup_key', 'status', 'expires_at'])
@@ -74,7 +78,11 @@ export class PaymentOrder {
   @Column({ type: 'text', name: 'redirect_url' })
   redirect_url: string;
 
-  @Column({ type: 'varchar', length: 20, default: 'UNVERIFIED' })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    default: PaymentOrderStatusEnum.UNVERIFIED,
+  })
   status: PaymentOrderStatus;
 
   @Column({ type: 'boolean', name: 'callback_sent', default: false })

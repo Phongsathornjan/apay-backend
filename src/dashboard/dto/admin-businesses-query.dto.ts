@@ -9,18 +9,17 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import type { BusinessSubscriptionStatus } from '../../subscriptions/entities/business-subscription.entity';
+import {
+  AdminBusinessesSortByEnum,
+  type AdminBusinessesSortBy,
+  BusinessSubscriptionStatusEnum,
+  type BusinessSubscriptionStatus,
+  SortOrderEnum,
+  type SortOrder,
+} from '../../enums';
 import { DashboardRangeQueryDto } from './dashboard-range-query.dto';
 
-export type AdminBusinessesSortBy =
-  | 'gmv'
-  | 'qr_created'
-  | 'qr_paid'
-  | 'quota_used'
-  | 'current_period_end'
-  | 'created_at';
-
-export type SortOrder = 'asc' | 'desc';
+export type { AdminBusinessesSortBy, SortOrder };
 
 export class AdminBusinessesQueryDto extends DashboardRangeQueryDto {
   @IsOptional()
@@ -33,22 +32,15 @@ export class AdminBusinessesQueryDto extends DashboardRangeQueryDto {
   package_id?: string;
 
   @IsOptional()
-  @IsIn(['ACTIVE', 'PAST_DUE', 'CANCELLED'])
+  @IsIn(Object.values(BusinessSubscriptionStatusEnum))
   status?: BusinessSubscriptionStatus;
 
   @IsOptional()
-  @IsIn([
-    'gmv',
-    'qr_created',
-    'qr_paid',
-    'quota_used',
-    'current_period_end',
-    'created_at',
-  ])
+  @IsIn(Object.values(AdminBusinessesSortByEnum))
   sort_by?: AdminBusinessesSortBy;
 
   @IsOptional()
-  @IsIn(['asc', 'desc'])
+  @IsIn(Object.values(SortOrderEnum))
   sort_order?: SortOrder;
 
   @IsOptional()

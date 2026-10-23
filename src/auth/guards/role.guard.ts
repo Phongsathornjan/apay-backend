@@ -31,21 +31,25 @@ export class RoleGuard implements CanActivate {
       .switchToHttp()
       .getRequest<Request & { user?: AuthUser }>();
 
-    const userId = request.user?.userId;
+    const requestUser = request.user;
 
-    if (!userId) {
+    if (!requestUser?.userId) {
       throw new ForbiddenException('Insufficient role permissions');
     }
 
-    const user = await this.usersService.findById(userId);
+    const user = await this.usersService.findById(requestUser.userId);
 
     if (!user || !user.is_active || !user.role) {
       throw new ForbiddenException('Insufficient role permissions');
     }
 
-    if (!requiredRoles.includes(user.role.name as UserRole)) {
+    const dbRole = user.role.name as UserRole;
+
+    if (!requiredRoles.includes(dbRole)) {
       throw new ForbiddenException('Insufficient role permissions');
     }
+
+    requestUser.role = dbRole;
 
     return true;
   }

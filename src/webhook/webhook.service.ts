@@ -8,6 +8,11 @@ import { firstValueFrom } from 'rxjs';
 import { DataSource, Repository } from 'typeorm';
 import { ApiKeyUsageLog } from '../api-keys/entities/api-key-usage-log.entity';
 import { safeCompare } from '../common/utils/crypto.util';
+import {
+  ApiKeyUsageActionEnum,
+  PaymentOrderStatusEnum,
+  WebhookProcessStatusEnum,
+} from '../enums';
 import { PaymentOrder } from '../payment/entities/payment-order.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { WebhookLog } from './entities/webhook-log.entity';
@@ -112,7 +117,7 @@ export class WebhookService {
       await this.saveLog({
         line_message_id: messageId,
         raw_payload: rawPayload,
-        process_status: 'NO_MATCH',
+        process_status: WebhookProcessStatusEnum.NO_MATCH,
       });
       return;
     }
@@ -137,7 +142,9 @@ export class WebhookService {
         .createQueryBuilder('order')
         .setLock('pessimistic_write')
         .where('order.lookup_key = :lookupKey', { lookupKey })
-        .andWhere('order.status = :status', { status: 'UNVERIFIED' })
+        .andWhere('order.status = :status', {
+          status: PaymentOrderStatusEnum.UNVERIFIED,
+        })
         .andWhere('order.expires_at >= :transferTime', {
           transferTime: parsed.transferTime,
         })
@@ -154,14 +161,14 @@ export class WebhookService {
             parsed_amount: Number(parsed.amount),
             parsed_datetime: parsed.datetimeStr,
             raw_payload: rawPayload,
-            process_status: 'NO_MATCH',
+            process_status: WebhookProcessStatusEnum.NO_MATCH,
           }),
         );
 
         return null;
       }
 
-      order.status = 'PAID';
+      order.status = PaymentOrderStatusEnum.PAID;
       order.paid_at = new Date();
       await manager.getRepository(PaymentOrder).save(order);
 
@@ -179,7 +186,7 @@ export class WebhookService {
             api_key_id: order.api_key_id,
             business_id: order.business_id,
             payment_order_id: order.id,
-            action: 'QR_PAID',
+            action: ApiKeyUsageActionEnum.QR_PAID,
             quota_deducted: quotaDeducted,
           }),
         );
@@ -192,7 +199,7 @@ export class WebhookService {
           parsed_amount: Number(parsed.amount),
           parsed_datetime: parsed.datetimeStr,
           raw_payload: rawPayload,
-          process_status: 'MATCHED',
+          process_status: WebhookProcessStatusEnum.MATCHED,
         }),
       );
 

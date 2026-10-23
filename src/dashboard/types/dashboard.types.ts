@@ -1,6 +1,7 @@
+import type { DashboardInterval } from '../../enums/dashboard-interval.enum';
 import { BusinessSubscriptionStatus } from '../../subscriptions/entities/business-subscription.entity';
 
-export type DashboardInterval = 'hour' | 'day';
+export type { DashboardInterval };
 
 export interface DashboardRange {
   from: string;

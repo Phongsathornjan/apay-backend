@@ -41,6 +41,15 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
   - `HttpException` errors are formatted by global `HttpErrorFilter` into `{ ok: false, status, correlation_id, message }`.
   - Every request gets `req.correlation_id` via `correlationIdMiddleware` (from `x-correlation-id` header or generated UUID), and `LoggerInterceptor` logs masked request/response bodies via `src/utils/maskBody.ts`.
 - **Raw Body Requirement**: `NestFactory.create(AppModule, { rawBody: true })` is required so `request.rawBody` is available for LINE webhook HMAC-SHA256 signature verification.
+- **Central Enums (`src/enums/`)**: ทุกค่า enum ของระบบ (role + คอลัมน์ที่เป็น enum ใน DB) ถูกประกาศที่ `src/enums/*.enum.ts` และ re-export ผ่าน barrel `src/enums/index.ts`:
+  - `role.enum.ts` → `RoleEnum` (`ADMIN = 'admin'`, `BUSINESS = 'business'`) + type `UserRole` (ใช้ใน `AuthUser`, JWT payload, `@Roles(...)`)
+  - `business-subscription-status.enum.ts` → `BusinessSubscriptionStatusEnum` + type `BusinessSubscriptionStatus`
+  - `payment-order-status.enum.ts` → `PaymentOrderStatusEnum` + type `PaymentOrderStatus`
+  - `webhook-process-status.enum.ts` → `WebhookProcessStatusEnum` + type `WebhookProcessStatus`
+  - `api-key-usage-action.enum.ts` → `ApiKeyUsageActionEnum` + type `ApiKeyUsageAction`
+  - Query-value enums: `dashboard-interval.enum.ts`, `dashboard-usage-metric.enum.ts`, `sort-order.enum.ts`, `admin-businesses-sort-by.enum.ts` (`AdminBusinessesSortByEnum` + type `AdminBusinessesSortBy`)
+  - Each file exports the runtime enum **and** a string-literal union type derived from it (`` `${XEnum}` ``), so entity/DTO types keep the exact same shape as before. Entity files (`payment-order.entity.ts`, `business-subscription.entity.ts`, `webhook-log.entity.ts`, `api-key-usage-log.entity.ts`) and `auth/types/auth-user.type.ts` re-export those types for backwards compatibility.
+  - **ห้ามประกาศ union literal ซ้ำในโมดูลอื่น**: import จาก `src/enums` (หรือไฟล์ enum โดยตรง) และใช้ `Object.values(<Enum>)` เป็นค่าให้ `@IsIn(...)` / `In([...])` แทนการพิมพ์ค่าด้วยมือ เพื่อไม่ให้ validation กับ entity หลุดจากกัน (มี test คุมสัญญาที่ `src/enums/enums.spec.ts`)
 
 ## Database & Security Rules (`apay` Schema)
 
@@ -61,13 +70,13 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 ## Core Business Logic
 
 ### 1. Auth & API Keys (`src/auth/`, `src/users/`, `src/business/`)
-- **Roles**: `admin` and `business`. Protected routes use `@UseGuards(JwtAuthGuard, RoleGuard)` and `@Roles(...)`.
+- **Roles**: `admin` and `business`. Protected routes use `@UseGuards(JwtAuthGuard, RoleGuard)` and `@Roles(...)`. `RoleGuard` verifies the user exists, is active (`user.is_active`), has a valid role in `requiredRoles`, and syncs `request.user.role` from the database.
 - **Endpoints (`/api/v1/auth`)**:
   - `POST /login`: Authenticates `admin` or `business` user with username/password; verifies business `is_active` for `business` role.
-  - `POST /register-business` (`admin` only): Transactionally creates **only** a `User` (`role = business`) and `Business` (no API key at registration). Optional `package_id` immediately assigns a Master Package. Returns `{ user_id, username, role, business_id, business_name, promptpay_id }`.
+  - `POST /register-business` (`admin` only): Creates a `User` (`role = business`), a `Business`, and (optionally) the initial Master Package assignment — **all inside one TypeORM `DataSource.transaction`** (`manager` is passed to `SubscriptionsService.assignOrChangePackage`), so any failure (duplicate username, missing role, invalid/inactive `package_id`) rolls back everything. No API key is created at registration. Returns `{ user_id, username, role, business_id, business_name, promptpay_id }`.
   - `POST /token`: Exchanges a business API key (from body `api_key` or `x-api-key` header) for an access/refresh JWT bundle. Looks up `api_keys` by `key_prefix` with `is_active = true` and not soft-deleted, verifies `business.is_active` and `user.is_active`, then compares `sha256(apiKey)` via timing-safe `safeCompare` against `api_keys.key_hash`.
   - `POST /refresh`: Rotates access & refresh tokens. If the refresh token payload has `api_key_id`, the key must still be active/not deleted and `api_keys.refresh_token_hash` must match (rotated on every refresh). Otherwise falls back to `users.refresh_token_hash` / `businesses.refresh_token_hash`.
-- **JWT Payload**: `sub`, `username`, `role`, `business_id`, `api_key_id` (`null` for username/password logins). `JwtStrategy` maps `api_key_id` to `req.user.apiKeyId`.
+- **JWT Payload**: `sub`, `username`, `role`, `business_id`, `api_key_id` (`null` for username/password logins), `type` (`'access'` or `'refresh'`). `JwtStrategy` rejects payloads without `sub` or with `type !== 'access'`, and maps `api_key_id` to `req.user.apiKeyId`.
 - **API Key Format**: `apay_live_<8_hex>_<32_hex>` (`src/auth/utils/api-key.util.ts`). Only `key_prefix` (`apay_live_<8_hex>`) and SHA-256 `key_hash` are stored in `api_keys`. Hash comparisons use timing-safe `safeCompare`.
 
 ### 2. Master Packages (`src/packages/`)
@@ -84,6 +93,7 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
   - `GET /business/:businessId` (`admin`, `business`): Returns current subscription (status, quota, `current_period_end`, `last_payment_at`), API key slot usage (`used`/`max`), and `subscription_periods` history. Business users can only read their own `business_id` (otherwise `404`).
   - `GET /business/:businessId/usage` (`admin`, `business`): Returns current-period summary, requests in the last hour, and per-API-key breakdown (`qr_created_count`, `qr_paid_count`, `quota_deducted_count`, `last_used_at`, including soft-deleted keys).
 - **`SubscriptionsService` internals**:
+  - `assignOrChangePackage(businessId, packageId, manager?)` — validates the business/package (using `manager`'s repositories when provided) and wraps `applyPackageToSubscription()` in a new transaction; pass a `manager` to join an existing transaction (used by `POST /register-business`) so failures roll back everything.
   - `applyPackageToSubscription()` — maps package values (`quota_limit`, `rate_limit_per_hour`, `max_api_keys`, `billing_cycle_months`), resets `quota_used = 0` / `quota_remaining = quota_limit`, sets `status = 'ACTIVE'`, `current_period_start`, `current_period_end = addMonthsClamped(start, billing_cycle_months)`, `last_payment_at = now`. Snapshots the previous period when `quota_used > 0`. **Only this function resets quotas.**
   - `expireIfPastDue()` — lazy expiry: when `status = 'ACTIVE'` and `now >= current_period_end`, snapshots the period, sets `status = 'PAST_DUE'` and `quota_remaining = 0` (keeps `quota_used`). **No auto-renew, no grace period, no quota reset.**
   - `renewSubscription()` — admin renewal described above.
@@ -104,8 +114,8 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 
 ### 5. Payment Orders & PromptPay QR (`src/payment/`)
 - **Endpoints (`/api/v1/payments`)**:
-  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. Requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). If the JWT contains `api_key_id`, the key must still be active/not deleted, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
-  - `GET /orders/:id` (JWT): Returns order details (`business` users can only access their own `business_id`).
+  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. Requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). If the JWT contains `api_key_id`, the key must still be active/not deleted and belong to the business, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
+  - `GET /orders/:id` (`business`, `admin`): Returns order details (`business` users must have a valid `businessId` matching `order.business_id`, otherwise `404`).
 - **Order Allocation Logic (`PaymentService`)**:
   - Lazily marks any `UNVERIFIED` orders with `expires_at <= now` as `EXPIRED` before allocating.
   - Floors input `amount` (`>= 1`) to integer `base_amount` and allocates the lowest unused `decimal_ref` from `0.01` to `0.99` (`MAX_DECIMAL_REF = 99`) among active `UNVERIFIED` orders with the same `base_amount`. Throws `409 Conflict` if all 99 slots are occupied.
@@ -130,7 +140,7 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
   - Sends an HTTP `POST` callback (`event: 'payment.paid'`, 5s timeout) to `order.redirect_url`, recording `callback_sent` and `callback_status_code` on the order.
 
 ### 7. Dashboard Analytics (`src/dashboard/`)
-- **Read-only Analytics APIs** for Frontend KPI cards and charts (`Asia/Bangkok` / `UTC+7` timezone). Guarded by `@UseGuards(JwtAuthGuard, RoleGuard)`. Any module using `RoleGuard` (`PackagesModule`, `SubscriptionsModule`, `ApiKeysModule`, `DashboardModule`) imports `UsersModule` so `RoleGuard` can resolve `UsersService` without circular dependencies.
+- **Read-only Analytics APIs** for Frontend KPI cards and charts (`Asia/Bangkok` / `UTC+7` timezone). Guarded by `@UseGuards(JwtAuthGuard, RoleGuard)`. Any module using `RoleGuard` (`PackagesModule`, `SubscriptionsModule`, `ApiKeysModule`, `PaymentModule`, `DashboardModule`) imports `UsersModule` so `RoleGuard` can resolve `UsersService` without circular dependencies.
 - **Range & Bucketing (`src/dashboard/utils/dashboard-bucket.util.ts`)**:
   - Half-open range `[from, to)`. Default range = last 30 days (`to = now`, `from = now - 30d`), maximum 365 days (`400 BadRequestException` if `from > to`, `> 365d`, or `> 744` buckets).
   - Supports `interval = 'day' | 'hour'` (`hour` requires range `<= 31` days).

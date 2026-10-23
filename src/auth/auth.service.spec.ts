@@ -2,12 +2,19 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  InternalServerErrorException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
 import { DataSource } from 'typeorm';
 import { ApiKey } from '../api-keys/entities/api-key.entity';
 import { Business } from '../business/entities/business.entity';
 import { BusinessService } from '../business/business.service';
 import { sha256 } from '../common/utils/crypto.util';
+import { RoleEnum } from '../enums';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { Role } from '../users/entities/role.entity';
 import { User } from '../users/entities/user.entity';
@@ -117,6 +124,114 @@ describe('AuthService', () => {
     service = module.get<AuthService>(AuthService);
   });
 
+  describe('login', () => {
+    it('logs in an admin user and returns token bundle with user info', async () => {
+      const passwordHash = await bcrypt.hash('AdminPass123!', 4);
+      usersService.findByUsername.mockResolvedValue({
+        id: 'admin-1',
+        username: 'admin',
+        password_hash: passwordHash,
+        is_active: true,
+        role: { name: RoleEnum.ADMIN },
+      });
+
+      const result = await service.login({
+        username: 'admin',
+        password: 'AdminPass123!',
+      });
+
+      expect(result).toMatchObject({
+        access_token: 'access-token',
+        refresh_token: 'refresh-token',
+        token_type: 'Bearer',
+        user: {
+          user_id: 'admin-1',
+          username: 'admin',
+          role: RoleEnum.ADMIN,
+          business_id: null,
+        },
+      });
+      expect(usersService.updateRefreshTokenHash).toHaveBeenCalledWith(
+        'admin-1',
+        sha256('refresh-token'),
+      );
+      expect(businessService.findByUserId).not.toHaveBeenCalled();
+    });
+
+    it('logs in a business user and resolves business_id', async () => {
+      const passwordHash = await bcrypt.hash('MerchantPass123!', 4);
+      usersService.findByUsername.mockResolvedValue({
+        id: 'user-1',
+        username: 'merchant',
+        password_hash: passwordHash,
+        is_active: true,
+        role: { name: RoleEnum.BUSINESS },
+      });
+      businessService.findByUserId.mockResolvedValue({
+        id: 'business-1',
+        is_active: true,
+      });
+
+      const result = await service.login({
+        username: 'merchant',
+        password: 'MerchantPass123!',
+      });
+
+      expect(result.user).toEqual({
+        user_id: 'user-1',
+        username: 'merchant',
+        role: RoleEnum.BUSINESS,
+        business_id: 'business-1',
+      });
+      expect(businessService.updateRefreshTokenHash).toHaveBeenCalledWith(
+        'business-1',
+        sha256('refresh-token'),
+      );
+    });
+
+    it('rejects unknown or inactive users', async () => {
+      usersService.findByUsername.mockResolvedValue(null);
+
+      await expect(
+        service.login({ username: 'unknown', password: 'pw' }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('rejects wrong passwords', async () => {
+      const passwordHash = await bcrypt.hash('CorrectPass123!', 4);
+      usersService.findByUsername.mockResolvedValue({
+        id: 'user-1',
+        username: 'merchant',
+        password_hash: passwordHash,
+        is_active: true,
+        role: { name: RoleEnum.BUSINESS },
+      });
+
+      await expect(
+        service.login({ username: 'merchant', password: 'WrongPassword!' }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('rejects when the business account is inactive', async () => {
+      const passwordHash = await bcrypt.hash('MerchantPass123!', 4);
+      usersService.findByUsername.mockResolvedValue({
+        id: 'user-1',
+        username: 'merchant',
+        password_hash: passwordHash,
+        is_active: true,
+        role: { name: RoleEnum.BUSINESS },
+      });
+      businessService.findByUserId.mockResolvedValue({
+        id: 'business-1',
+        is_active: false,
+      });
+
+      await expect(
+        service.login({ username: 'merchant', password: 'MerchantPass123!' }),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+  });
+
   describe('registerBusiness', () => {
     beforeEach(() => {
       usersRepository.findOne.mockResolvedValue(null);
@@ -133,7 +248,7 @@ describe('AuthService', () => {
       }));
     });
 
-    it('creates only the user and business without an API key', async () => {
+    it('creates the user, business and optional package inside one transaction', async () => {
       const result = await service.registerBusiness({
         username: 'merchant',
         password: 'StrongPass123!',
@@ -154,12 +269,13 @@ describe('AuthService', () => {
         business_id: 'business-1',
       });
       expect(result).not.toHaveProperty('api_key');
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(
         subscriptionsService.assignOrChangePackage,
       ).not.toHaveBeenCalled();
     });
 
-    it('assigns the requested package after creating the business', async () => {
+    it('assigns the requested package within the same transaction', async () => {
       await service.registerBusiness({
         username: 'merchant',
         password: 'StrongPass123!',
@@ -168,9 +284,55 @@ describe('AuthService', () => {
         package_id: 'package-1',
       });
 
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(
         subscriptionsService.assignOrChangePackage,
-      ).toHaveBeenCalledWith('business-1', 'package-1');
+      ).toHaveBeenCalledWith('business-1', 'package-1', manager);
+    });
+
+    it('propagates package assignment errors so the transaction rolls back', async () => {
+      const error = new BadRequestException('Package is not available');
+      subscriptionsService.assignOrChangePackage.mockRejectedValueOnce(error);
+
+      await expect(
+        service.registerBusiness({
+          username: 'merchant',
+          password: 'StrongPass123!',
+          business_name: 'Coffee Shop',
+          promptpay_id: '0812345678',
+          package_id: 'missing-package',
+        }),
+      ).rejects.toBe(error);
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(usersRepository.save).toHaveBeenCalledTimes(1);
+      expect(businessesRepository.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws ConflictException when username already exists', async () => {
+      usersRepository.findOne.mockResolvedValue({ id: 'existing-user' });
+
+      await expect(
+        service.registerBusiness({
+          username: 'merchant',
+          password: 'StrongPass123!',
+          business_name: 'Coffee Shop',
+          promptpay_id: '0812345678',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('throws InternalServerErrorException when business role is missing', async () => {
+      rolesRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.registerBusiness({
+          username: 'merchant',
+          password: 'StrongPass123!',
+          business_name: 'Coffee Shop',
+          promptpay_id: '0812345678',
+        }),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
     });
   });
 

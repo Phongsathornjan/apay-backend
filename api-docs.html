@@ -2257,7 +2257,7 @@
           post: {
             tags: ["Auth"],
             summary: "ลงทะเบียนบัญชีธุรกิจใหม่ (เฉพาะ Admin)",
-            description: "สร้าง `User` (`role = business`) และ `Business` ภายใต้ Database Transaction เดียวกัน โดย **ยังไม่ออก API Key** ในขั้นตอนนี้ (ต้องสร้างภายหลังผ่าน `/api/v1/api-keys` เมื่อผูกแพ็กเกจแล้ว) สามารถระบุ `package_id` เพื่อผูกแพ็กเกจเริ่มต้นได้ทันที",
+            description: "สร้าง `User` (`role = business`) และ `Business` ภายใต้ Database Transaction เดียวกัน โดย **ยังไม่ออก API Key** ในขั้นตอนนี้ (ต้องสร้างภายหลังผ่าน `/api/v1/api-keys` เมื่อผูกแพ็กเกจแล้ว) สามารถระบุ `package_id` เพื่อผูกแพ็กเกจเริ่มต้นได้ทันที โดยการผูกแพ็กเกจจะอยู่ใน Transaction เดียวกัน หากผูกแพ็กเกจไม่สำเร็จ (เช่น ไม่พบแพ็กเกจหรือแพ็กเกจถูกปิดใช้งาน) ข้อมูล User และ Business จะถูก Rollback ทั้งหมด",
             security: [{ BearerAuth: [] }],
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" }
@@ -2297,6 +2297,20 @@
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "400": {
+                description: "`package_id` ไม่พร้อมใช้งาน (ไม่พบแพ็กเกจหรือแพ็กเกจถูกปิดใช้งาน) — ข้อมูล User และ Business จะถูก Rollback",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 400,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Package is not available"
+                    }
                   }
                 }
               },
@@ -2623,6 +2637,14 @@
               },
               "401": {
                 description: "ไม่ได้แนบ JWT หรือ Token ไม่ถูกต้อง",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "403": {
+                description: "ไม่มีสิทธิ์ตาม Role หรือบัญชีผู้ใช้ถูกระงับ",
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -2973,7 +2995,7 @@
             tags: ["ApiKeys"],
             summary: "สร้าง API Key ใหม่",
             description:
-              "ต้องมี Subscription `ACTIVE` ที่ยังไม่เลย `current_period_end` และจำนวน Key ที่ยังไม่ถูกลบต้องต่ำกว่า `max_api_keys` — Response จะแสดง Raw `api_key` เพียงครั้งเดียว",
+              "ต้องมี Subscription `ACTIVE` ที่ยังไม่เลย `current_period_end` และจำนวน Key ที่ยังไม่ถูกลบต้องต่ำกว่า `max_api_keys` — Response จะแสดง Raw `api_key` เพียงครั้งเดียว ผู้ใช้ Role `business` จะถูกบังคับให้ใช้ `business_id` ของตัวเองเสมอ (ค่าที่ส่งมาจะถูกเพิกเฉย) ส่วน `admin` ต้องระบุ `business_id` และอาจระบุ `package_id` เพื่อผูก/เปลี่ยนแพ็กเกจก่อนสร้าง Key",
             security: [{ BearerAuth: [] }],
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" }

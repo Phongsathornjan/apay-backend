@@ -14,6 +14,7 @@ import { AuthUser } from '../auth/types/auth-user.type';
 import { Business } from '../business/entities/business.entity';
 import { BusinessService } from '../business/business.service';
 import { getBangkokParts } from '../common/utils/datetime.util';
+import { ApiKeyUsageActionEnum, PaymentOrderStatusEnum } from '../enums';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { CreateQrDto } from './dto/create-qr.dto';
 import { PaymentOrder } from './entities/payment-order.entity';
@@ -52,7 +53,10 @@ export class PaymentService {
         where: { id: user.apiKeyId, is_active: true },
       });
 
-      if (!apiKey) {
+      if (
+        !apiKey ||
+        (apiKey.business_id && apiKey.business_id !== business.id)
+      ) {
         throw new UnauthorizedException('API key is inactive or revoked');
       }
     }
@@ -90,8 +94,11 @@ export class PaymentService {
       );
 
       await ordersRepository.update(
-        { status: 'UNVERIFIED', expires_at: LessThanOrEqual(now) },
-        { status: 'EXPIRED' },
+        {
+          status: PaymentOrderStatusEnum.UNVERIFIED,
+          expires_at: LessThanOrEqual(now),
+        },
+        { status: PaymentOrderStatusEnum.EXPIRED },
       );
 
       const baseAmount = Math.floor(dto.amount);
@@ -122,7 +129,7 @@ export class PaymentService {
         total_amount: totalAmount,
         qr_payload: qrPayload,
         redirect_url: dto.redirect_url,
-        status: 'UNVERIFIED',
+        status: PaymentOrderStatusEnum.UNVERIFIED,
         callback_sent: false,
         callback_status_code: null,
         expires_at: expiresAt,
@@ -139,7 +146,7 @@ export class PaymentService {
             api_key_id: apiKeyId,
             business_id: business.id,
             payment_order_id: orderId,
-            action: 'QR_CREATED',
+            action: ApiKeyUsageActionEnum.QR_CREATED,
             quota_deducted: false,
           }),
         );
@@ -174,7 +181,7 @@ export class PaymentService {
     const activeOrders = await ordersRepository.find({
       where: {
         base_amount: baseAmount,
-        status: 'UNVERIFIED',
+        status: PaymentOrderStatusEnum.UNVERIFIED,
         expires_at: MoreThan(now),
       },
       select: { decimal_ref: true },

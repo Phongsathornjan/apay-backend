@@ -7,7 +7,7 @@ export const maskBody = (
   // ---------- helper ----------
   const keepStartEnd = (str: string, keepStart: number, keepEnd: number) => {
     const start = str.slice(0, keepStart);
-    const end = str.slice(-keepEnd);
+    const end = keepEnd > 0 ? str.slice(-keepEnd) : '';
     const middle = 'X'.repeat(Math.max(str.length - keepStart - keepEnd, 0));
     return start + middle + end;
   };
@@ -40,16 +40,16 @@ export const maskBody = (
       return 'citizenId';
     }
 
-    if (k.includes('name')) {
-      return 'name';
-    }
-
     if (k.includes('first_name')) {
       return 'firstName';
     }
 
     if (k.includes('last_name')) {
       return 'lastName';
+    }
+
+    if (k.includes('name')) {
+      return 'name';
     }
 
     if (k.includes('url') || k.includes('link')) {

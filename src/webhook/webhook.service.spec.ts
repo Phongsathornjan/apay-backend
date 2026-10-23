@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { createHmac } from 'node:crypto';
+import { of, throwError } from 'rxjs';
 import { DataSource } from 'typeorm';
 import { ApiKeyUsageLog } from '../api-keys/entities/api-key-usage-log.entity';
 import { PaymentOrder } from '../payment/entities/payment-order.entity';
@@ -230,6 +231,86 @@ describe('WebhookService', () => {
       });
 
       expect(result).toEqual({ processed: 0 });
+    });
+
+    it('logs NO_MATCH when text message is not a parseable KBank notification', async () => {
+      webhookLogsRepository.exists.mockResolvedValue(false);
+
+      const result = await service.handleWebhook({
+        events: [
+          {
+            type: 'message',
+            timestamp: 1792485060000,
+            message: { type: 'text', id: 'message-3', text: 'สวัสดีครับ' },
+          },
+        ],
+      });
+
+      expect(result).toEqual({ processed: 1 });
+      expect(webhookLogsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          line_message_id: 'message-3',
+          process_status: 'NO_MATCH',
+        }),
+      );
+    });
+
+    it('matches a valid KBank message and sends callback to redirect_url', async () => {
+      webhookLogsRepository.exists.mockResolvedValue(false);
+      queryBuilder.getOne.mockResolvedValue(
+        buildOrder({ redirect_url: 'https://merchant.example.com/cb' }),
+      );
+      subscriptionsService.deductQuotaOnPaid.mockResolvedValue(true);
+      httpService.post.mockReturnValue(of({ status: 200 }));
+
+      const result = await service.handleWebhook({
+        events: [
+          {
+            type: 'message',
+            timestamp: 1792485060000,
+            message: {
+              type: 'text',
+              id: 'message-4',
+              text: 'เงินเข้า จำนวน 100.01 บาท วันที่ 20/10/69 เวลา 15:31 น.',
+            },
+          },
+        ],
+      });
+
+      expect(result).toEqual({ processed: 1 });
+      expect(httpService.post).toHaveBeenCalledWith(
+        'https://merchant.example.com/cb',
+        expect.objectContaining({
+          event: 'payment.paid',
+          order_id: 'order-1',
+        }),
+        { timeout: 5000 },
+      );
+      expect(ordersRepository.update).toHaveBeenCalledWith(
+        { id: 'order-1' },
+        { callback_sent: true, callback_status_code: 200 },
+      );
+    });
+
+    it('records callback_sent = false when callback HTTP request fails', async () => {
+      await (service as any).sendCallback(
+        buildOrder({ redirect_url: 'https://merchant.example.com/cb' }),
+      );
+      httpService.post.mockReturnValueOnce(
+        throwError(() => ({
+          message: 'Bad Gateway',
+          response: { status: 502 },
+        })),
+      );
+
+      await (service as any).sendCallback(
+        buildOrder({ redirect_url: 'https://merchant.example.com/cb' }),
+      );
+
+      expect(ordersRepository.update).toHaveBeenLastCalledWith(
+        { id: 'order-1' },
+        { callback_sent: false, callback_status_code: 502 },
+      );
     });
   });
 

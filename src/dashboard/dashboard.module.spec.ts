@@ -63,6 +63,47 @@ describe('DashboardModule / Controller Guard wiring', () => {
 
     await controller.getOverview({ user } as any, {});
     expect(dashboardService.getOverview).toHaveBeenCalledWith(user, {});
+
+    await controller.getUsageTimeseries({ user } as any, {});
+    expect(dashboardService.getUsageTimeseries).toHaveBeenCalledWith(user, {});
+
+    await controller.getTransactionsTimeseries({ user } as any, {});
+    expect(dashboardService.getTransactionsTimeseries).toHaveBeenCalledWith(
+      user,
+      {},
+    );
+
+    await controller.getRateLimit({ user } as any, {});
+    expect(dashboardService.getRateLimitStatus).toHaveBeenCalledWith(user, {});
+
+    await controller.getApiKeys({ user } as any, {});
+    expect(dashboardService.getApiKeyBreakdown).toHaveBeenCalledWith(user, {});
+
+    await controller.getApiKeysTimeseries({ user } as any, {});
+    expect(dashboardService.getApiKeyTimeseries).toHaveBeenCalledWith(user, {});
+
+    await controller.getSubscription({ user } as any, {});
+    expect(dashboardService.getSubscriptionTrend).toHaveBeenCalledWith(
+      user,
+      {},
+    );
+  });
+
+  it('delegates admin routes to DashboardService', async () => {
+    await controller.getAdminOverview({});
+    expect(dashboardService.getAdminOverview).toHaveBeenCalledWith({});
+
+    await controller.getAdminTimeseries({});
+    expect(dashboardService.getAdminTimeseries).toHaveBeenCalledWith({});
+
+    await controller.getAdminDistribution({});
+    expect(dashboardService.getAdminDistribution).toHaveBeenCalledWith({});
+
+    await controller.getAdminBusinesses({});
+    expect(dashboardService.getAdminBusinesses).toHaveBeenCalledWith({});
+
+    await controller.getAdminExpiring({});
+    expect(dashboardService.getAdminExpiring).toHaveBeenCalledWith({});
   });
 
   it('blocks business users from calling admin-only routes via RoleGuard', async () => {

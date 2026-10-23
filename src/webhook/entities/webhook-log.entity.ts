@@ -10,12 +10,9 @@ import {
 import { PaymentOrder } from '../../payment/entities/payment-order.entity';
 import { numericTransformer } from '../../common/transformers/numeric.transformer';
 import { DB_SCHEMA } from '../../database/database.schema';
+import type { WebhookProcessStatus } from '../../enums/webhook-process-status.enum';
 
-export type WebhookProcessStatus =
-  | 'MATCHED'
-  | 'NO_MATCH'
-  | 'DUPLICATE'
-  | 'IGNORED';
+export type { WebhookProcessStatus };
 
 @Entity({ schema: DB_SCHEMA, name: 'webhook_logs' })
 @Index('idx_webhook_logs_created', ['created_at'])

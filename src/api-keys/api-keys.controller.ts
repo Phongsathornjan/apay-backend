@@ -18,7 +18,7 @@ import { AuthUser } from '../auth/types/auth-user.type';
 import { ApiKeysService } from './api-keys.service';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
 import { UpdateApiKeyDto } from './dto/update-api-key.dto';
-
+import { RoleEnum } from '../enums/role.enum'
 @Controller({
   path: 'api-keys',
   version: '1',
@@ -28,7 +28,7 @@ export class ApiKeysController {
   constructor(private readonly apiKeysService: ApiKeysService) {}
 
   @Post()
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   create(
     @Req() request: Request & { user: AuthUser },
     @Body() dto: CreateApiKeyDto,
@@ -37,7 +37,7 @@ export class ApiKeysController {
   }
 
   @Get()
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   findAll(
     @Req() request: Request & { user: AuthUser },
     @Query('business_id') businessId?: string,
@@ -46,7 +46,7 @@ export class ApiKeysController {
   }
 
   @Get('usage/business/:businessId')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getBusinessUsage(
     @Req() request: Request & { user: AuthUser },
     @Param('businessId') businessId: string,
@@ -55,7 +55,7 @@ export class ApiKeysController {
   }
 
   @Get(':id/usage')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getKeyUsage(
     @Req() request: Request & { user: AuthUser },
     @Param('id') id: string,
@@ -64,7 +64,7 @@ export class ApiKeysController {
   }
 
   @Patch(':id')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   update(
     @Req() request: Request & { user: AuthUser },
     @Param('id') id: string,
@@ -74,7 +74,7 @@ export class ApiKeysController {
   }
 
   @Delete(':id')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   remove(
     @Req() request: Request & { user: AuthUser },
     @Param('id') id: string,

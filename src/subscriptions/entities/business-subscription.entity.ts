@@ -11,9 +11,13 @@ import {
 } from 'typeorm';
 import { Business } from '../../business/entities/business.entity';
 import { DB_SCHEMA } from '../../database/database.schema';
+import {
+  BusinessSubscriptionStatusEnum,
+  type BusinessSubscriptionStatus,
+} from '../../enums/business-subscription-status.enum';
 import { Package } from '../../packages/entities/package.entity';
 
-export type BusinessSubscriptionStatus = 'ACTIVE' | 'PAST_DUE' | 'CANCELLED';
+export type { BusinessSubscriptionStatus };
 
 /**
  * Subscription ของ Business (1 Business → 1 Active Subscription)
@@ -46,7 +50,7 @@ export class BusinessSubscription {
   @Column({
     type: 'varchar',
     length: 20,
-    default: 'ACTIVE',
+    default: BusinessSubscriptionStatusEnum.ACTIVE,
   })
   status: BusinessSubscriptionStatus;
 

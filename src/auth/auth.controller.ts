@@ -15,6 +15,7 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterBusinessDto } from './dto/register-business.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RoleGuard } from './guards/role.guard';
+import { RoleEnum } from '../enums';
 
 @Controller({
   path: 'auth',
@@ -31,7 +32,7 @@ export class AuthController {
 
   @Post('register-business')
   @UseGuards(JwtAuthGuard, RoleGuard)
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   registerBusiness(@Body() dto: RegisterBusinessDto) {
     return this.authService.registerBusiness(dto);
   }

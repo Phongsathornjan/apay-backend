@@ -7,13 +7,14 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
+import { RoleEnum } from '../enums/role.enum';
 import { Package } from '../packages/entities/package.entity';
 import { Role } from '../users/entities/role.entity';
 import { User } from '../users/entities/user.entity';
 
 const DEFAULT_ROLES: Array<{ name: string; description: string }> = [
-  { name: 'admin', description: 'ผู้ดูแลระบบ (Administrator)' },
-  { name: 'business', description: 'บัญชีร้านค้า (Merchant/Business)' },
+  { name: RoleEnum.ADMIN, description: 'ผู้ดูแลระบบ (Administrator)' },
+  { name: RoleEnum.BUSINESS, description: 'บัญชีร้านค้า (Merchant/Business)' },
 ];
 
 const DEFAULT_PACKAGES: Array<{
@@ -130,7 +131,7 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
     }
 
     const adminRole = await this.rolesRepository.findOne({
-      where: { name: 'admin' },
+      where: { name: RoleEnum.ADMIN },
     });
 
     if (!adminRole) {
@@ -148,7 +149,7 @@ export class DatabaseSeederService implements OnApplicationBootstrap {
           { id: existing.id },
           { role_id: adminRole.id },
         );
-        this.logger.log(`Updated user "${username}" to role "admin"`);
+        this.logger.log(`Updated user "${username}" to role "${RoleEnum.ADMIN}"`);
       }
       return;
     }

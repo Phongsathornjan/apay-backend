@@ -1,4 +1,9 @@
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -16,6 +21,7 @@ describe('PaymentService', () => {
   const ordersRepository = {
     update: jest.fn(),
     find: jest.fn(),
+    findOne: jest.fn(),
     create: jest.fn(),
     save: jest.fn(),
   };
@@ -190,5 +196,42 @@ describe('PaymentService', () => {
     await expect(service.createQrOrder(user, dto)).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
+  });
+
+  it('resolves business via findByUserId when user.businessId is null and rejects when none exists', async () => {
+    businessService.findByUserId.mockResolvedValueOnce(null);
+
+    await expect(
+      service.createQrOrder({ ...user, businessId: null }, dto),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('throws ConflictException when all 99 decimal reference slots are occupied', async () => {
+    ordersRepository.find.mockResolvedValue(
+      Array.from({ length: 99 }, (_, i) => ({
+        decimal_ref: (i + 1) / 100,
+      })),
+    );
+
+    await expect(service.createQrOrder(user, dto)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  describe('findOrderById & getOrderOrFail', () => {
+    it('returns the order when found', async () => {
+      const order = { id: 'ord-1' } as PaymentOrder;
+      ordersRepository.findOne.mockResolvedValue(order);
+
+      await expect(service.getOrderOrFail('ord-1')).resolves.toBe(order);
+    });
+
+    it('throws NotFoundException when order does not exist', async () => {
+      ordersRepository.findOne.mockResolvedValue(null);
+
+      await expect(service.getOrderOrFail('missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
   });
 });

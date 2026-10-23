@@ -4,6 +4,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RoleGuard } from '../auth/guards/role.guard';
 import { AuthUser } from '../auth/types/auth-user.type';
+import { RoleEnum } from '../enums';
 import { DashboardService } from './dashboard.service';
 import { AdminBusinessesQueryDto } from './dto/admin-businesses-query.dto';
 import { DashboardApiKeysQueryDto } from './dto/dashboard-api-keys-query.dto';
@@ -20,7 +21,7 @@ export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
   @Get('overview')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getOverview(
     @Req() request: Request & { user: AuthUser },
     @Query() query: DashboardRangeQueryDto,
@@ -29,7 +30,7 @@ export class DashboardController {
   }
 
   @Get('usage/timeseries')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getUsageTimeseries(
     @Req() request: Request & { user: AuthUser },
     @Query() query: DashboardUsageQueryDto,
@@ -38,7 +39,7 @@ export class DashboardController {
   }
 
   @Get('transactions/timeseries')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getTransactionsTimeseries(
     @Req() request: Request & { user: AuthUser },
     @Query() query: DashboardRangeQueryDto,
@@ -47,7 +48,7 @@ export class DashboardController {
   }
 
   @Get('rate-limit')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getRateLimit(
     @Req() request: Request & { user: AuthUser },
     @Query() query: DashboardRangeQueryDto,
@@ -56,7 +57,7 @@ export class DashboardController {
   }
 
   @Get('api-keys')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getApiKeys(
     @Req() request: Request & { user: AuthUser },
     @Query() query: DashboardApiKeysQueryDto,
@@ -65,7 +66,7 @@ export class DashboardController {
   }
 
   @Get('api-keys/timeseries')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getApiKeysTimeseries(
     @Req() request: Request & { user: AuthUser },
     @Query() query: DashboardApiKeysQueryDto,
@@ -74,7 +75,7 @@ export class DashboardController {
   }
 
   @Get('subscription')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getSubscription(
     @Req() request: Request & { user: AuthUser },
     @Query() query: DashboardRangeQueryDto,
@@ -83,31 +84,31 @@ export class DashboardController {
   }
 
   @Get('admin/overview')
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   getAdminOverview(@Query() query: DashboardRangeQueryDto) {
     return this.dashboardService.getAdminOverview(query);
   }
 
   @Get('admin/timeseries')
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   getAdminTimeseries(@Query() query: DashboardRangeQueryDto) {
     return this.dashboardService.getAdminTimeseries(query);
   }
 
   @Get('admin/distribution')
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   getAdminDistribution(@Query() query: DashboardRangeQueryDto) {
     return this.dashboardService.getAdminDistribution(query);
   }
 
   @Get('admin/businesses')
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   getAdminBusinesses(@Query() query: AdminBusinessesQueryDto) {
     return this.dashboardService.getAdminBusinesses(query);
   }
 
   @Get('admin/expiring')
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   getAdminExpiring(@Query() query: DashboardExpiringQueryDto) {
     return this.dashboardService.getAdminExpiring(query);
   }

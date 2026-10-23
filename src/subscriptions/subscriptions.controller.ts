@@ -13,6 +13,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RoleGuard } from '../auth/guards/role.guard';
 import { AuthUser } from '../auth/types/auth-user.type';
+import { RoleEnum } from '../enums';
 import { AssignSubscriptionDto } from './dto/assign-subscription.dto';
 import { RenewSubscriptionDto } from './dto/renew-subscription.dto';
 import { SubscriptionsService } from './subscriptions.service';
@@ -26,7 +27,7 @@ export class SubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
 
   @Post()
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   assignOrChange(@Body() dto: AssignSubscriptionDto) {
     return this.subscriptionsService.assignOrChangePackage(
       dto.business_id,
@@ -35,7 +36,7 @@ export class SubscriptionsController {
   }
 
   @Post(':id/renew')
-  @Roles('admin')
+  @Roles(RoleEnum.ADMIN)
   renew(
     @Param('id') id: string,
     @Body() dto: RenewSubscriptionDto,
@@ -44,7 +45,7 @@ export class SubscriptionsController {
   }
 
   @Get('business/:businessId')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getBusiness(
     @Req() request: Request & { user: AuthUser },
     @Param('businessId') businessId: string,
@@ -57,7 +58,7 @@ export class SubscriptionsController {
   }
 
   @Get('business/:businessId/usage')
-  @Roles('admin', 'business')
+  @Roles(RoleEnum.ADMIN, RoleEnum.BUSINESS)
   getBusinessUsage(
     @Req() request: Request & { user: AuthUser },
     @Param('businessId') businessId: string,
@@ -68,7 +69,10 @@ export class SubscriptionsController {
   }
 
   private assertBusinessAccess(user: AuthUser, businessId: string): void {
-    if (user.role === 'business' && user.businessId !== businessId) {
+    if (
+      user.role === RoleEnum.BUSINESS &&
+      (!user.businessId || user.businessId !== businessId)
+    ) {
       throw new NotFoundException('Business subscription not found');
     }
   }

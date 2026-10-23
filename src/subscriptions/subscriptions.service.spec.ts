@@ -214,6 +214,30 @@ describe('SubscriptionsService', () => {
       expect(periodsRepository.save).not.toHaveBeenCalled();
     });
 
+    it('joins a caller-provided transaction instead of opening a new one', async () => {
+      businessesRepository.findOne.mockResolvedValue({
+        id: 'business-1',
+        is_active: true,
+      });
+      packagesRepository.findOne.mockResolvedValue(buildPackage());
+      subscriptionsRepository.findOne.mockResolvedValue(
+        buildSubscription({ quota_used: 0 }),
+      );
+
+      await service.assignOrChangePackage(
+        'business-1',
+        'package-1',
+        manager as any,
+      );
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(manager.getRepository).toHaveBeenCalledWith(Business);
+      expect(manager.getRepository).toHaveBeenCalledWith(Package);
+      expect(subscriptionsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ package_id: 'package-1', status: 'ACTIVE' }),
+      );
+    });
+
     it('throws when the business does not exist', async () => {
       businessesRepository.findOne.mockResolvedValue(null);
 

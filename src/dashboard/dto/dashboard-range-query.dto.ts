@@ -8,7 +8,10 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import type { DashboardInterval } from '../types/dashboard.types';
+import {
+  DashboardIntervalEnum,
+  type DashboardInterval,
+} from '../../enums/dashboard-interval.enum';
 
 export class DashboardRangeQueryDto {
   @IsOptional()
@@ -20,7 +23,7 @@ export class DashboardRangeQueryDto {
   to?: string;
 
   @IsOptional()
-  @IsIn(['hour', 'day'])
+  @IsIn(Object.values(DashboardIntervalEnum))
   interval?: DashboardInterval;
 
   @IsOptional()

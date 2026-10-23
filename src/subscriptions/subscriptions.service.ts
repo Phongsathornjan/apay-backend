@@ -24,6 +24,10 @@ import { Package } from '../packages/entities/package.entity';
 import { PaymentOrder } from '../payment/entities/payment-order.entity';
 import { BusinessSubscription } from './entities/business-subscription.entity';
 import { SubscriptionPeriod } from './entities/subscription-period.entity';
+import {
+  ApiKeyUsageActionEnum,
+  BusinessSubscriptionStatusEnum,
+} from '../enums';
 
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 
@@ -60,12 +64,21 @@ export class SubscriptionsService {
   /**
    * ผูกหรือเปลี่ยน Package ให้ Business ภายใน Transaction เดียว
    * เริ่มรอบบิลใหม่และรีเซ็ตโควต้าตาม Package ใหม่ทันที
+   *
+   * ส่ง `manager` เข้ามาเพื่อร่วม Transaction ของผู้เรียก (เช่น
+   * `AuthService.registerBusiness`) ได้ ถ้าไม่ส่งจะเปิด Transaction ใหม่เอง
    */
   async assignOrChangePackage(
     businessId: string,
     packageId: string,
+    manager?: EntityManager,
   ): Promise<BusinessSubscription> {
-    const business = await this.businessesRepository.findOne({
+    const businessesRepository =
+      manager?.getRepository(Business) ?? this.businessesRepository;
+    const packagesRepository =
+      manager?.getRepository(Package) ?? this.packagesRepository;
+
+    const business = await businessesRepository.findOne({
       where: { id: businessId },
     });
 
@@ -77,7 +90,7 @@ export class SubscriptionsService {
       throw new BadRequestException('Business is inactive');
     }
 
-    const pkg = await this.packagesRepository.findOne({
+    const pkg = await packagesRepository.findOne({
       where: { id: packageId },
     });
 
@@ -85,8 +98,12 @@ export class SubscriptionsService {
       throw new BadRequestException('Package is not available');
     }
 
-    return this.dataSource.transaction((manager) =>
-      this.applyPackageToSubscription(businessId, pkg, manager),
+    if (manager) {
+      return this.applyPackageToSubscription(businessId, pkg, manager);
+    }
+
+    return this.dataSource.transaction((transactionManager) =>
+      this.applyPackageToSubscription(businessId, pkg, transactionManager),
     );
   }
 
@@ -111,7 +128,7 @@ export class SubscriptionsService {
         throw new NotFoundException('Subscription not found');
       }
 
-      if (subscription.status === 'CANCELLED') {
+      if (subscription.status === BusinessSubscriptionStatusEnum.CANCELLED) {
         throw new BadRequestException('Subscription is cancelled');
       }
 
@@ -158,8 +175,14 @@ export class SubscriptionsService {
 
     const existing = await subscriptionsRepository.findOne({
       where: [
-        { business_id: businessId, status: 'ACTIVE' },
-        { business_id: businessId, status: 'PAST_DUE' },
+        {
+          business_id: businessId,
+          status: BusinessSubscriptionStatusEnum.ACTIVE,
+        },
+        {
+          business_id: businessId,
+          status: BusinessSubscriptionStatusEnum.PAST_DUE,
+        },
       ],
       order: { created_at: 'DESC' },
     });
@@ -171,7 +194,7 @@ export class SubscriptionsService {
     const start = periodStart ?? now;
     const values: Partial<BusinessSubscription> = {
       package_id: pkg.id,
-      status: 'ACTIVE',
+      status: BusinessSubscriptionStatusEnum.ACTIVE,
       quota_limit: pkg.quota_limit,
       quota_used: 0,
       quota_remaining: pkg.quota_limit,
@@ -206,7 +229,7 @@ export class SubscriptionsService {
     subscription: BusinessSubscription,
     manager?: EntityManager,
   ): Promise<BusinessSubscription> {
-    if (subscription.status !== 'ACTIVE') {
+    if (subscription.status !== BusinessSubscriptionStatusEnum.ACTIVE) {
       return subscription;
     }
 
@@ -218,7 +241,7 @@ export class SubscriptionsService {
 
     await this.snapshotPeriod(subscription, this.resolveManager(manager));
 
-    subscription.status = 'PAST_DUE';
+    subscription.status = BusinessSubscriptionStatusEnum.PAST_DUE;
     subscription.quota_remaining = 0;
 
     const repository =
@@ -285,7 +308,10 @@ export class SubscriptionsService {
   ): Promise<BusinessSubscription> {
     const subscription = await this.getCurrentSubscription(businessId, manager);
 
-    if (!subscription || subscription.status !== 'ACTIVE') {
+    if (
+      !subscription ||
+      subscription.status !== BusinessSubscriptionStatusEnum.ACTIVE
+    ) {
       throw new ForbiddenException('Business package is inactive or unpaid');
     }
 
@@ -303,7 +329,7 @@ export class SubscriptionsService {
     const requestsInLastHour = await usageLogsRepository.count({
       where: {
         business_id: businessId,
-        action: 'QR_CREATED',
+        action: ApiKeyUsageActionEnum.QR_CREATED,
         created_at: MoreThanOrEqual(hourAgo),
       },
     });
@@ -344,7 +370,10 @@ export class SubscriptionsService {
 
     const current = await this.expireIfPastDue(subscription, manager);
 
-    if (current.status !== 'ACTIVE' || current.quota_remaining <= 0) {
+    if (
+      current.status !== BusinessSubscriptionStatusEnum.ACTIVE ||
+      current.quota_remaining <= 0
+    ) {
       return false;
     }
 
@@ -363,7 +392,7 @@ export class SubscriptionsService {
   async handleHourlyBillingEnforcement(): Promise<void> {
     const expiredSubscriptions = await this.subscriptionsRepository.find({
       where: {
-        status: 'ACTIVE',
+        status: BusinessSubscriptionStatusEnum.ACTIVE,
         current_period_end: LessThanOrEqual(new Date()),
       },
     });
@@ -418,7 +447,7 @@ export class SubscriptionsService {
     const currentHourRequests = await this.usageLogsRepository.count({
       where: {
         business_id: businessId,
-        action: 'QR_CREATED',
+        action: ApiKeyUsageActionEnum.QR_CREATED,
         created_at: MoreThanOrEqual(hourAgo),
       },
     });
@@ -434,15 +463,15 @@ export class SubscriptionsService {
         const [qrCreatedCount, qrPaidCount, quotaDeductedCount] =
           await Promise.all([
             this.usageLogsRepository.count({
-              where: { api_key_id: key.id, action: 'QR_CREATED' },
+              where: { api_key_id: key.id, action: ApiKeyUsageActionEnum.QR_CREATED },
             }),
             this.usageLogsRepository.count({
-              where: { api_key_id: key.id, action: 'QR_PAID' },
+              where: { api_key_id: key.id, action: ApiKeyUsageActionEnum.QR_PAID },
             }),
             this.usageLogsRepository.count({
               where: {
                 api_key_id: key.id,
-                action: 'QR_PAID',
+                action: ApiKeyUsageActionEnum.QR_PAID,
                 quota_deducted: true,
               },
             }),

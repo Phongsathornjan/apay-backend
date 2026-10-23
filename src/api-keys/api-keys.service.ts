@@ -14,6 +14,9 @@ import { CreateApiKeyDto } from './dto/create-api-key.dto';
 import { UpdateApiKeyDto } from './dto/update-api-key.dto';
 import { ApiKeyUsageLog } from './entities/api-key-usage-log.entity';
 import { ApiKey } from './entities/api-key.entity';
+import { RoleEnum } from '../enums/role.enum'
+import { BusinessService } from '../business/business.service';
+import { ApiKeyUsageActionEnum, BusinessSubscriptionStatusEnum } from '../enums';
 
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const RECENT_LOGS_LIMIT = 20;
@@ -28,6 +31,7 @@ export class ApiKeysService {
     @InjectRepository(Business)
     private readonly businessesRepository: Repository<Business>,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly businessService: BusinessService,
   ) {}
 
   /**
@@ -35,9 +39,20 @@ export class ApiKeysService {
    * และจำนวน Key ที่ยังไม่ถูกลบต้องไม่เกิน `max_api_keys` ของแพ็กเกจ
    */
   async createApiKey(user: AuthUser, dto: CreateApiKeyDto) {
-    const businessId = this.resolveBusinessId(user, dto);
+    /**
+     * Business user ถูกล็อกให้ใช้ `business_id` ของตัวเองเสมอ
+     * ส่วน Admin ต้องระบุ `business_id` มาใน Body
+     */
+    const businessId =
+      user.role === RoleEnum.BUSINESS
+        ? await this.businessService.resolveBusinessId(user)
+        : dto.business_id;
 
-    if (user.role === 'admin' && dto.package_id) {
+    if (!businessId) {
+      throw new BadRequestException('business_id is required');
+    }
+
+    if (user.role === RoleEnum.ADMIN && dto.package_id) {
       await this.subscriptionsService.assignOrChangePackage(
         businessId,
         dto.package_id,
@@ -61,7 +76,7 @@ export class ApiKeysService {
 
     if (
       !subscription ||
-      subscription.status !== 'ACTIVE' ||
+      subscription.status !== BusinessSubscriptionStatusEnum.ACTIVE ||
       subscription.current_period_end <= new Date()
     ) {
       throw new BadRequestException(
@@ -98,12 +113,12 @@ export class ApiKeysService {
   }
 
   async findAll(user: AuthUser, businessId?: string) {
-    if (user.role === 'business' && !user.businessId) {
+    if (user.role === RoleEnum.BUSINESS && !user.businessId) {
       throw new BadRequestException('Business account not found');
     }
 
     const targetBusinessId =
-      user.role === 'business' ? user.businessId : businessId;
+      user.role === RoleEnum.BUSINESS ? user.businessId : businessId;
 
     const apiKeys = await this.apiKeysRepository.find({
       where: targetBusinessId ? { business_id: targetBusinessId } : {},
@@ -155,19 +170,19 @@ export class ApiKeysService {
       recentLogs,
     ] = await Promise.all([
       this.usageLogsRepository.count({
-        where: { api_key_id: apiKey.id, action: 'QR_CREATED' },
+        where: { api_key_id: apiKey.id, action: ApiKeyUsageActionEnum.QR_CREATED },
       }),
       this.usageLogsRepository.count({
         where: {
           api_key_id: apiKey.id,
-          action: 'QR_PAID',
+          action: ApiKeyUsageActionEnum.QR_PAID,
           quota_deducted: true,
         },
       }),
       this.usageLogsRepository.count({
         where: {
           api_key_id: apiKey.id,
-          action: 'QR_CREATED',
+          action: ApiKeyUsageActionEnum.QR_CREATED,
           created_at: MoreThanOrEqual(hourAgo),
         },
       }),
@@ -199,25 +214,9 @@ export class ApiKeysService {
   }
 
   async getBusinessUsage(user: AuthUser, businessId: string) {
-    this.assertBusinessAccess(user, businessId);
+    this.businessService.assertBusinessAccess(user, businessId);
 
     return this.subscriptionsService.getBusinessUsage(businessId);
-  }
-
-  private resolveBusinessId(user: AuthUser, dto: CreateApiKeyDto): string {
-    if (user.role === 'business') {
-      if (!user.businessId) {
-        throw new BadRequestException('Business account not found');
-      }
-
-      return user.businessId;
-    }
-
-    if (!dto.business_id) {
-      throw new BadRequestException('business_id is required for admin');
-    }
-
-    return dto.business_id;
   }
 
   private async findAccessibleKey(
@@ -234,15 +233,9 @@ export class ApiKeysService {
       throw new NotFoundException('API key not found');
     }
 
-    this.assertBusinessAccess(user, apiKey.business_id);
+    this.businessService.assertBusinessAccess(user, apiKey.business_id);
 
     return apiKey;
-  }
-
-  private assertBusinessAccess(user: AuthUser, businessId: string): void {
-    if (user.role === 'business' && user.businessId !== businessId) {
-      throw new NotFoundException('API key not found');
-    }
   }
 
   private toApiKeySummary(apiKey: ApiKey) {

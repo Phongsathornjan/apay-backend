@@ -9,6 +9,17 @@ import { ApiKey } from '../api-keys/entities/api-key.entity';
 import { ApiKeyUsageLog } from '../api-keys/entities/api-key-usage-log.entity';
 import { AuthUser } from '../auth/types/auth-user.type';
 import { Business } from '../business/entities/business.entity';
+import {
+  AdminBusinessesSortByEnum,
+  ApiKeyUsageActionEnum,
+  BusinessSubscriptionStatusEnum,
+  DashboardIntervalEnum,
+  DashboardUsageMetricEnum,
+  PaymentOrderStatusEnum,
+  RoleEnum,
+  SortOrderEnum,
+  WebhookProcessStatusEnum,
+} from '../enums';
 import { Package } from '../packages/entities/package.entity';
 import { PaymentOrder } from '../payment/entities/payment-order.entity';
 import {
@@ -89,7 +100,7 @@ export class DashboardService {
   ) {}
 
   private resolveBusinessId(user: AuthUser, businessId?: string): string {
-    if (user.role === 'business') {
+    if (user.role === RoleEnum.BUSINESS) {
       if (!user.businessId) {
         throw new NotFoundException('Business not found');
       }
@@ -227,7 +238,7 @@ export class DashboardService {
     const range = resolveDashboardRange(
       query.from,
       query.to,
-      query.interval ?? 'day',
+      query.interval ?? DashboardIntervalEnum.DAY,
       now,
     );
 
@@ -262,13 +273,13 @@ export class DashboardService {
       this.usageLogsRepository.count({
         where: {
           business_id: businessId,
-          action: 'QR_CREATED',
+          action: ApiKeyUsageActionEnum.QR_CREATED,
           created_at: MoreThanOrEqual(hourAgo),
         },
       }),
       this.webhookLogsRepository.find({
         where: {
-          process_status: 'MATCHED',
+          process_status: WebhookProcessStatusEnum.MATCHED,
           created_at: Between(range.from, range.to),
         },
         relations: { matched_order: true },
@@ -280,11 +291,14 @@ export class DashboardService {
     );
 
     const qrCreated = logsInRange.filter(
-      (log) => log.action === 'QR_CREATED',
+      (log) => log.action === ApiKeyUsageActionEnum.QR_CREATED,
     ).length;
-    const qrPaid = logsInRange.filter((log) => log.action === 'QR_PAID').length;
+    const qrPaid = logsInRange.filter(
+      (log) => log.action === ApiKeyUsageActionEnum.QR_PAID,
+    ).length;
     const quotaDeducted = logsInRange.filter(
-      (log) => log.action === 'QR_PAID' && log.quota_deducted,
+      (log) =>
+        log.action === ApiKeyUsageActionEnum.QR_PAID && log.quota_deducted,
     ).length;
     const usagePaidRate =
       qrCreated > 0 ? this.roundMetric(qrPaid / qrCreated) : 0;
@@ -305,14 +319,14 @@ export class DashboardService {
         range.to,
       );
       const paidInRange =
-        order.status === 'PAID' &&
+        order.status === PaymentOrderStatusEnum.PAID &&
         this.isInHalfOpenRange(order.paid_at, range.from, range.to);
 
       if (createdInRange) {
         ordersCreated += 1;
         const isExpired =
-          order.status === 'EXPIRED' ||
-          (order.status === 'UNVERIFIED' &&
+          order.status === PaymentOrderStatusEnum.EXPIRED ||
+          (order.status === PaymentOrderStatusEnum.UNVERIFIED &&
             new Date(order.expires_at).getTime() <= now.getTime());
         if (isExpired) {
           expiredCount += 1;
@@ -325,7 +339,7 @@ export class DashboardService {
       }
 
       if (
-        order.status === 'UNVERIFIED' &&
+        order.status === PaymentOrderStatusEnum.UNVERIFIED &&
         new Date(order.expires_at).getTime() > now.getTime()
       ) {
         activeUnverifiedCount += 1;
@@ -415,7 +429,7 @@ export class DashboardService {
     const range = resolveDashboardRange(
       query.from,
       query.to,
-      query.interval ?? 'day',
+      query.interval ?? DashboardIntervalEnum.DAY,
       now,
     );
 
@@ -446,9 +460,9 @@ export class DashboardService {
         range.interval,
       ).getTime();
 
-      if (log.action === 'QR_CREATED') {
+      if (log.action === ApiKeyUsageActionEnum.QR_CREATED) {
         createdMap.set(bucketKey, (createdMap.get(bucketKey) ?? 0) + 1);
-      } else if (log.action === 'QR_PAID') {
+      } else if (log.action === ApiKeyUsageActionEnum.QR_PAID) {
         paidMap.set(bucketKey, (paidMap.get(bucketKey) ?? 0) + 1);
         if (log.quota_deducted) {
           deductedMap.set(bucketKey, (deductedMap.get(bucketKey) ?? 0) + 1);
@@ -457,18 +471,18 @@ export class DashboardService {
     }
 
     const allSeries: Record<DashboardUsageMetric, DashboardSeries> = {
-      qr_created: {
-        key: 'qr_created',
+      [DashboardUsageMetricEnum.QR_CREATED]: {
+        key: DashboardUsageMetricEnum.QR_CREATED,
         label: 'QR Created',
         points: this.buildZeroFilledPoints(buckets, range.interval, createdMap),
       },
-      qr_paid: {
-        key: 'qr_paid',
+      [DashboardUsageMetricEnum.QR_PAID]: {
+        key: DashboardUsageMetricEnum.QR_PAID,
         label: 'QR Paid',
         points: this.buildZeroFilledPoints(buckets, range.interval, paidMap),
       },
-      quota_deducted: {
-        key: 'quota_deducted',
+      [DashboardUsageMetricEnum.QUOTA_DEDUCTED]: {
+        key: DashboardUsageMetricEnum.QUOTA_DEDUCTED,
         label: 'Quota Deducted',
         points: this.buildZeroFilledPoints(
           buckets,
@@ -481,9 +495,9 @@ export class DashboardService {
     const series = query.metric
       ? [allSeries[query.metric]]
       : [
-          allSeries.qr_created,
-          allSeries.qr_paid,
-          allSeries.quota_deducted,
+          allSeries[DashboardUsageMetricEnum.QR_CREATED],
+          allSeries[DashboardUsageMetricEnum.QR_PAID],
+          allSeries[DashboardUsageMetricEnum.QUOTA_DEDUCTED],
         ];
 
     return {
@@ -501,7 +515,7 @@ export class DashboardService {
     const range = resolveDashboardRange(
       query.from,
       query.to,
-      query.interval ?? 'day',
+      query.interval ?? DashboardIntervalEnum.DAY,
       now,
     );
 
@@ -529,7 +543,7 @@ export class DashboardService {
         range.to,
       );
       const paidInRange =
-        order.status === 'PAID' &&
+        order.status === PaymentOrderStatusEnum.PAID &&
         this.isInHalfOpenRange(order.paid_at, range.from, range.to);
 
       if (createdInRange) {
@@ -542,13 +556,13 @@ export class DashboardService {
           (ordersCreatedMap.get(createdBucket) ?? 0) + 1,
         );
 
-        if (order.status === 'EXPIRED') {
+        if (order.status === PaymentOrderStatusEnum.EXPIRED) {
           statusExpired += 1;
           expiredCountMap.set(
             createdBucket,
             (expiredCountMap.get(createdBucket) ?? 0) + 1,
           );
-        } else if (order.status === 'UNVERIFIED') {
+        } else if (order.status === PaymentOrderStatusEnum.UNVERIFIED) {
           if (new Date(order.expires_at).getTime() <= now.getTime()) {
             statusUnverifiedExpired += 1;
             expiredCountMap.set(
@@ -660,7 +674,7 @@ export class DashboardService {
     const hourAgo = new Date(now.getTime() - RATE_LIMIT_WINDOW_MS);
     const seriesEnd = startOfBangkokBucket(
       new Date(now.getTime() + RATE_LIMIT_WINDOW_MS),
-      'hour',
+      DashboardIntervalEnum.HOUR,
     );
     const seriesStart = new Date(
       seriesEnd.getTime() - hours * RATE_LIMIT_WINDOW_MS,
@@ -670,27 +684,34 @@ export class DashboardService {
       this.usageLogsRepository.count({
         where: {
           business_id: businessId,
-          action: 'QR_CREATED',
+          action: ApiKeyUsageActionEnum.QR_CREATED,
           created_at: MoreThanOrEqual(hourAgo),
         },
       }),
       this.usageLogsRepository.find({
         where: {
           business_id: businessId,
-          action: 'QR_CREATED',
+          action: ApiKeyUsageActionEnum.QR_CREATED,
           created_at: Between(seriesStart, seriesEnd),
         },
       }),
     ]);
 
-    const buckets = generateBuckets(seriesStart, seriesEnd, 'hour');
+    const buckets = generateBuckets(
+      seriesStart,
+      seriesEnd,
+      DashboardIntervalEnum.HOUR,
+    );
     const bucketCounts = new Map<number, number>();
 
     for (const log of logs) {
       if (!this.isInHalfOpenRange(log.created_at, seriesStart, seriesEnd)) {
         continue;
       }
-      const key = startOfBangkokBucket(new Date(log.created_at), 'hour').getTime();
+      const key = startOfBangkokBucket(
+        new Date(log.created_at),
+        DashboardIntervalEnum.HOUR,
+      ).getTime();
       bucketCounts.set(key, (bucketCounts.get(key) ?? 0) + 1);
     }
 
@@ -715,7 +736,11 @@ export class DashboardService {
       limit_per_hour: limitPerHour,
       remaining,
       utilization,
-      series: this.buildZeroFilledPoints(buckets, 'hour', bucketCounts),
+      series: this.buildZeroFilledPoints(
+        buckets,
+        DashboardIntervalEnum.HOUR,
+        bucketCounts,
+      ),
     };
   }
 
@@ -728,7 +753,7 @@ export class DashboardService {
     const range = resolveDashboardRange(
       query.from,
       query.to,
-      query.interval ?? 'day',
+      query.interval ?? DashboardIntervalEnum.DAY,
       now,
     );
     const includeDeleted = query.include_deleted ?? true;
@@ -766,9 +791,9 @@ export class DashboardService {
         quota_deducted: 0,
       };
 
-      if (log.action === 'QR_CREATED') {
+      if (log.action === ApiKeyUsageActionEnum.QR_CREATED) {
         entry.qr_created += 1;
-      } else if (log.action === 'QR_PAID') {
+      } else if (log.action === ApiKeyUsageActionEnum.QR_PAID) {
         entry.qr_paid += 1;
         if (log.quota_deducted) {
           entry.quota_deducted += 1;
@@ -842,10 +867,11 @@ export class DashboardService {
     const range = resolveDashboardRange(
       query.from,
       query.to,
-      query.interval ?? 'day',
+      query.interval ?? DashboardIntervalEnum.DAY,
       now,
     );
-    const metric: DashboardUsageMetric = query.metric ?? 'qr_created';
+    const metric: DashboardUsageMetric =
+      query.metric ?? DashboardUsageMetricEnum.QR_CREATED;
     const includeDeleted = query.include_deleted ?? true;
 
     await this.getBusinessOrFail(businessId);
@@ -893,10 +919,12 @@ export class DashboardService {
       }
 
       const matchesMetric =
-        (metric === 'qr_created' && log.action === 'QR_CREATED') ||
-        (metric === 'qr_paid' && log.action === 'QR_PAID') ||
-        (metric === 'quota_deducted' &&
-          log.action === 'QR_PAID' &&
+        (metric === DashboardUsageMetricEnum.QR_CREATED &&
+          log.action === ApiKeyUsageActionEnum.QR_CREATED) ||
+        (metric === DashboardUsageMetricEnum.QR_PAID &&
+          log.action === ApiKeyUsageActionEnum.QR_PAID) ||
+        (metric === DashboardUsageMetricEnum.QUOTA_DEDUCTED &&
+          log.action === ApiKeyUsageActionEnum.QR_PAID &&
           log.quota_deducted);
 
       if (!matchesMetric) {
@@ -1030,26 +1058,33 @@ export class DashboardService {
         ? await this.usageLogsRepository.find({
             where: {
               business_id: businessId,
-              action: 'QR_PAID',
+              action: ApiKeyUsageActionEnum.QR_PAID,
               quota_deducted: true,
               created_at: Between(periodStart, effectiveEnd),
             },
           })
         : [];
 
-    const buckets = generateBuckets(periodStart, effectiveEnd, 'day');
+    const buckets = generateBuckets(
+      periodStart,
+      effectiveEnd,
+      DashboardIntervalEnum.DAY,
+    );
     const dailyDeducted = new Map<number, number>();
 
     for (const log of logs) {
       if (
         !this.isInHalfOpenRange(log.created_at, periodStart, effectiveEnd) ||
-        log.action !== 'QR_PAID' ||
+        log.action !== ApiKeyUsageActionEnum.QR_PAID ||
         !log.quota_deducted
       ) {
         continue;
       }
 
-      const key = startOfBangkokBucket(new Date(log.created_at), 'day').getTime();
+      const key = startOfBangkokBucket(
+        new Date(log.created_at),
+        DashboardIntervalEnum.DAY,
+      ).getTime();
       dailyDeducted.set(key, (dailyDeducted.get(key) ?? 0) + 1);
     }
 
@@ -1063,7 +1098,7 @@ export class DashboardService {
 
       return {
         bucket_start: bucket.toISOString(),
-        label: formatBucketLabel(bucket, 'day'),
+        label: formatBucketLabel(bucket, DashboardIntervalEnum.DAY),
         quota_deducted: deducted,
         cumulative_used: cumulativeUsed,
         quota_remaining: remaining,
@@ -1086,7 +1121,7 @@ export class DashboardService {
     const range = resolveDashboardRange(
       query.from,
       query.to,
-      query.interval ?? 'day',
+      query.interval ?? DashboardIntervalEnum.DAY,
       now,
     );
 
@@ -1134,7 +1169,7 @@ export class DashboardService {
         continue;
       }
 
-      if (sub.status === 'ACTIVE') {
+      if (sub.status === BusinessSubscriptionStatusEnum.ACTIVE) {
         activeSubs += 1;
         estimatedMrr += packagePriceMap.get(sub.package_id) ?? 0;
 
@@ -1145,9 +1180,9 @@ export class DashboardService {
         if (endMs >= now.getTime() && endMs <= thirtyDaysLater) {
           expiring30d += 1;
         }
-      } else if (sub.status === 'PAST_DUE') {
+      } else if (sub.status === BusinessSubscriptionStatusEnum.PAST_DUE) {
         pastDueSubs += 1;
-      } else if (sub.status === 'CANCELLED') {
+      } else if (sub.status === BusinessSubscriptionStatusEnum.CANCELLED) {
         cancelledSubs += 1;
       }
     }
@@ -1165,14 +1200,14 @@ export class DashboardService {
         range.to,
       );
       const paidInRange =
-        order.status === 'PAID' &&
+        order.status === PaymentOrderStatusEnum.PAID &&
         this.isInHalfOpenRange(order.paid_at, range.from, range.to);
 
       if (createdInRange) {
         ordersCreated += 1;
         const isExpired =
-          order.status === 'EXPIRED' ||
-          (order.status === 'UNVERIFIED' &&
+          order.status === PaymentOrderStatusEnum.EXPIRED ||
+          (order.status === PaymentOrderStatusEnum.UNVERIFIED &&
             new Date(order.expires_at).getTime() <= now.getTime());
         if (isExpired) {
           expiredCount += 1;
@@ -1185,7 +1220,7 @@ export class DashboardService {
       }
 
       if (
-        order.status === 'UNVERIFIED' &&
+        order.status === PaymentOrderStatusEnum.UNVERIFIED &&
         new Date(order.expires_at).getTime() > now.getTime()
       ) {
         activeUnverifiedCount += 1;
@@ -1196,9 +1231,11 @@ export class DashboardService {
       this.isInHalfOpenRange(log.created_at, range.from, range.to),
     );
     const qrCreated = logsInRange.filter(
-      (log) => log.action === 'QR_CREATED',
+      (log) => log.action === ApiKeyUsageActionEnum.QR_CREATED,
     ).length;
-    const qrPaid = logsInRange.filter((log) => log.action === 'QR_PAID').length;
+    const qrPaid = logsInRange.filter(
+      (log) => log.action === ApiKeyUsageActionEnum.QR_PAID,
+    ).length;
 
     const roundedGmv = this.roundCurrency(gmv);
     const averageOrderValue =
@@ -1211,10 +1248,10 @@ export class DashboardService {
       this.isInHalfOpenRange(wh.created_at, range.from, range.to),
     );
     const matchedWebhooks = webhooksInRange.filter(
-      (wh) => wh.process_status === 'MATCHED',
+      (wh) => wh.process_status === WebhookProcessStatusEnum.MATCHED,
     ).length;
     const noMatchWebhooks = webhooksInRange.filter(
-      (wh) => wh.process_status === 'NO_MATCH',
+      (wh) => wh.process_status === WebhookProcessStatusEnum.NO_MATCH,
     ).length;
     const webhookDenominator = matchedWebhooks + noMatchWebhooks;
     const matchRate =
@@ -1267,7 +1304,7 @@ export class DashboardService {
     const range = resolveDashboardRange(
       query.from,
       query.to,
-      query.interval ?? 'day',
+      query.interval ?? DashboardIntervalEnum.DAY,
       now,
     );
 
@@ -1314,7 +1351,7 @@ export class DashboardService {
       }
 
       if (
-        order.status === 'PAID' &&
+        order.status === PaymentOrderStatusEnum.PAID &&
         order.paid_at &&
         this.isInHalfOpenRange(order.paid_at, range.from, range.to)
       ) {
@@ -1339,9 +1376,9 @@ export class DashboardService {
         range.interval,
       ).getTime();
 
-      if (log.action === 'QR_CREATED') {
+      if (log.action === ApiKeyUsageActionEnum.QR_CREATED) {
         qrCreatedMap.set(key, (qrCreatedMap.get(key) ?? 0) + 1);
-      } else if (log.action === 'QR_PAID') {
+      } else if (log.action === ApiKeyUsageActionEnum.QR_PAID) {
         qrPaidMap.set(key, (qrPaidMap.get(key) ?? 0) + 1);
       }
     }
@@ -1424,10 +1461,10 @@ export class DashboardService {
           (s) => s.package_id === pkg.id,
         );
         const activeCount = subsForPkg.filter(
-          (s) => s.status === 'ACTIVE',
+          (s) => s.status === BusinessSubscriptionStatusEnum.ACTIVE,
         ).length;
         const pastDueCount = subsForPkg.filter(
-          (s) => s.status === 'PAST_DUE',
+          (s) => s.status === BusinessSubscriptionStatusEnum.PAST_DUE,
         ).length;
 
         return {
@@ -1442,11 +1479,9 @@ export class DashboardService {
       },
     );
 
-    const statuses: BusinessSubscriptionStatus[] = [
-      'ACTIVE',
-      'PAST_DUE',
-      'CANCELLED',
-    ];
+    const statuses: BusinessSubscriptionStatus[] = Object.values(
+      BusinessSubscriptionStatusEnum,
+    );
     const subscriptionStatus: AdminStatusDistributionItem[] = statuses.map(
       (status) => ({
         status,
@@ -1463,7 +1498,10 @@ export class DashboardService {
     };
 
     for (const sub of nonDeletedSubs) {
-      if (sub.status !== 'ACTIVE' && sub.status !== 'PAST_DUE') {
+      if (
+        sub.status !== BusinessSubscriptionStatusEnum.ACTIVE &&
+        sub.status !== BusinessSubscriptionStatusEnum.PAST_DUE
+      ) {
         continue;
       }
 
@@ -1505,14 +1543,14 @@ export class DashboardService {
     const range = resolveDashboardRange(
       query.from,
       query.to,
-      query.interval ?? 'day',
+      query.interval ?? DashboardIntervalEnum.DAY,
       now,
     );
 
     const page = Math.max(1, Number(query.page ?? 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit ?? 20)));
-    const sortBy = query.sort_by ?? 'created_at';
-    const sortOrder = query.sort_order ?? 'desc';
+    const sortBy = query.sort_by ?? AdminBusinessesSortByEnum.CREATED_AT;
+    const sortOrder = query.sort_order ?? SortOrderEnum.DESC;
     const search = query.search?.trim().toLowerCase();
 
     const [businesses, subscriptions, packages, apiKeys, usageLogs, orders] =
@@ -1561,12 +1599,12 @@ export class DashboardService {
       if (!this.isInHalfOpenRange(log.created_at, range.from, range.to)) {
         continue;
       }
-      if (log.action === 'QR_CREATED') {
+      if (log.action === ApiKeyUsageActionEnum.QR_CREATED) {
         qrCreatedByBusiness.set(
           log.business_id,
           (qrCreatedByBusiness.get(log.business_id) ?? 0) + 1,
         );
-      } else if (log.action === 'QR_PAID') {
+      } else if (log.action === ApiKeyUsageActionEnum.QR_PAID) {
         qrPaidByBusiness.set(
           log.business_id,
           (qrPaidByBusiness.get(log.business_id) ?? 0) + 1,
@@ -1577,7 +1615,7 @@ export class DashboardService {
     const gmvByBusiness = new Map<string, number>();
     for (const order of orders) {
       if (
-        order.status === 'PAID' &&
+        order.status === PaymentOrderStatusEnum.PAID &&
         this.isInHalfOpenRange(order.paid_at, range.from, range.to)
       ) {
         gmvByBusiness.set(
@@ -1645,33 +1683,33 @@ export class DashboardService {
         };
       });
 
-    const direction = sortOrder === 'asc' ? 1 : -1;
+    const direction = sortOrder === SortOrderEnum.ASC ? 1 : -1;
     enriched.sort((a, b) => {
       let valA = 0;
       let valB = 0;
 
       switch (sortBy) {
-        case 'gmv':
+        case AdminBusinessesSortByEnum.GMV:
           valA = a.item.gmv;
           valB = b.item.gmv;
           break;
-        case 'qr_created':
+        case AdminBusinessesSortByEnum.QR_CREATED:
           valA = a.item.qr_created;
           valB = b.item.qr_created;
           break;
-        case 'qr_paid':
+        case AdminBusinessesSortByEnum.QR_PAID:
           valA = a.item.qr_paid;
           valB = b.item.qr_paid;
           break;
-        case 'quota_used':
+        case AdminBusinessesSortByEnum.QUOTA_USED:
           valA = a.item.quota_used ?? -1;
           valB = b.item.quota_used ?? -1;
           break;
-        case 'current_period_end':
+        case AdminBusinessesSortByEnum.CURRENT_PERIOD_END:
           valA = a.periodEndMs;
           valB = b.periodEndMs;
           break;
-        case 'created_at':
+        case AdminBusinessesSortByEnum.CREATED_AT:
         default:
           valA = a.createdAtMs;
           valB = b.createdAtMs;
@@ -1740,7 +1778,7 @@ export class DashboardService {
       const quotaRemaining = Number(sub.quota_remaining);
 
       if (
-        sub.status === 'ACTIVE' &&
+        sub.status === BusinessSubscriptionStatusEnum.ACTIVE &&
         periodEndMs >= now.getTime() &&
         periodEndMs <= windowEndMs
       ) {
@@ -1756,7 +1794,10 @@ export class DashboardService {
         });
       }
 
-      if (sub.status === 'ACTIVE' || sub.status === 'PAST_DUE') {
+      if (
+        sub.status === BusinessSubscriptionStatusEnum.ACTIVE ||
+        sub.status === BusinessSubscriptionStatusEnum.PAST_DUE
+      ) {
         const utilization =
           quotaLimit > 0 ? this.roundMetric(quotaUsed / quotaLimit) : 0;
         if (quotaLimit > 0 && utilization >= quotaThreshold) {

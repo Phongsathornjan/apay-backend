@@ -6,6 +6,7 @@ import {
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { AuthUser } from '../auth/types/auth-user.type';
+import { BusinessService } from '../business/business.service';
 import { Business } from '../business/entities/business.entity';
 import { BusinessSubscription } from '../subscriptions/entities/business-subscription.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -78,6 +79,11 @@ describe('ApiKeysService', () => {
     getBusinessUsage: jest.fn(),
   };
 
+  const businessService = {
+    resolveBusinessId: jest.fn(),
+    assertBusinessAccess: jest.fn(),
+  };
+
   const businessUser: AuthUser = {
     userId: 'user-1',
     username: 'merchant',
@@ -95,6 +101,24 @@ describe('ApiKeysService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
 
+    businessService.resolveBusinessId.mockImplementation(
+      async (user: AuthUser) => {
+        if (!user.businessId) {
+          throw new BadRequestException('Business account not found');
+        }
+
+        return user.businessId;
+      },
+    );
+
+    businessService.assertBusinessAccess.mockImplementation(
+      (user: AuthUser, businessId: string) => {
+        if (user.role === 'business' && user.businessId !== businessId) {
+          throw new NotFoundException('Business not found');
+        }
+      },
+    );
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ApiKeysService,
@@ -108,6 +132,7 @@ describe('ApiKeysService', () => {
           useValue: businessesRepository,
         },
         { provide: SubscriptionsService, useValue: subscriptionsService },
+        { provide: BusinessService, useValue: businessService },
       ],
     }).compile();
 
@@ -194,6 +219,35 @@ describe('ApiKeysService', () => {
       await expect(
         service.createApiKey(adminUser, { name: 'POS' }),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('ignores business_id from a business user and uses their own business', async () => {
+      businessesRepository.findOne.mockResolvedValue({
+        id: 'business-1',
+        is_active: true,
+      });
+      subscriptionsService.getCurrentSubscription.mockResolvedValue(
+        buildSubscription(),
+      );
+      apiKeysRepository.count.mockResolvedValue(0);
+      apiKeysRepository.create.mockImplementation((data) => data);
+      apiKeysRepository.save.mockImplementation(async (data) => ({
+        id: 'key-new',
+        ...data,
+      }));
+
+      const result = await service.createApiKey(businessUser, {
+        name: 'POS',
+        business_id: 'business-2',
+      });
+
+      expect(businessesRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'business-1' },
+      });
+      expect(result.business_id).toBe('business-1');
+      expect(
+        subscriptionsService.assignOrChangePackage,
+      ).not.toHaveBeenCalled();
     });
 
     it('assigns a package first when an admin provides package_id', async () => {

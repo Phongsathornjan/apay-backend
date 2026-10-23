@@ -1,7 +1,10 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsIn, IsOptional, IsUUID } from 'class-validator';
+import {
+  DashboardUsageMetricEnum,
+  type DashboardUsageMetric,
+} from '../../enums/dashboard-usage-metric.enum';
 import { DashboardRangeQueryDto } from './dashboard-range-query.dto';
-import type { DashboardUsageMetric } from './dashboard-usage-query.dto';
 
 export class DashboardApiKeysQueryDto extends DashboardRangeQueryDto {
   @IsOptional()
@@ -18,7 +21,7 @@ export class DashboardApiKeysQueryDto extends DashboardRangeQueryDto {
   include_deleted?: boolean;
 
   @IsOptional()
-  @IsIn(['qr_created', 'qr_paid', 'quota_deducted'])
+  @IsIn(Object.values(DashboardUsageMetricEnum))
   metric?: DashboardUsageMetric;
 
   @IsOptional()

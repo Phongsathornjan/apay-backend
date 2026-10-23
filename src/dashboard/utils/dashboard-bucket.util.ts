@@ -3,6 +3,7 @@ import {
   bangkokDateTimeToUtc,
   getBangkokParts,
 } from '../../common/utils/datetime.util';
+import { DashboardIntervalEnum } from '../../enums';
 import { DashboardInterval, DashboardRange } from '../types/dashboard.types';
 
 const BANGKOK_TIME_ZONE = 'Asia/Bangkok';
@@ -34,7 +35,8 @@ export function startOfBangkokBucket(
   const year = Number(dateStr.slice(0, 4));
   const month = Number(dateStr.slice(4, 6));
   const day = Number(dateStr.slice(6, 8));
-  const hour = interval === 'hour' ? Number(timeStr.slice(0, 2)) : 0;
+  const hour =
+    interval === DashboardIntervalEnum.HOUR ? Number(timeStr.slice(0, 2)) : 0;
 
   return bangkokDateTimeToUtc(year, month, day, hour, 0, 0);
 }
@@ -48,7 +50,7 @@ export function generateBuckets(
     return [];
   }
 
-  const stepMs = interval === 'hour' ? HOUR_MS : DAY_MS;
+  const stepMs = interval === DashboardIntervalEnum.HOUR ? HOUR_MS : DAY_MS;
   const start = startOfBangkokBucket(from, interval);
   const buckets: Date[] = [];
 
@@ -67,7 +69,7 @@ export function formatBucketLabel(
   bucket: Date,
   interval: DashboardInterval,
 ): string {
-  if (interval === 'hour') {
+  if (interval === DashboardIntervalEnum.HOUR) {
     return HOUR_LABEL_FORMATTER.format(bucket);
   }
 
@@ -77,7 +79,7 @@ export function formatBucketLabel(
 export function resolveDashboardRange(
   from?: string,
   to?: string,
-  interval: DashboardInterval = 'day',
+  interval: DashboardInterval = DashboardIntervalEnum.DAY,
   now: Date = new Date(),
 ): { from: Date; to: Date; interval: DashboardInterval } {
   const resolvedTo = to ? new Date(to) : new Date(now.getTime());
@@ -101,7 +103,10 @@ export function resolveDashboardRange(
     );
   }
 
-  if (interval === 'hour' && spanMs > MAX_HOUR_RANGE_DAYS * DAY_MS) {
+  if (
+    interval === DashboardIntervalEnum.HOUR &&
+    spanMs > MAX_HOUR_RANGE_DAYS * DAY_MS
+  ) {
     throw new BadRequestException(
       `Hourly interval cannot exceed ${MAX_HOUR_RANGE_DAYS} days`,
     );
