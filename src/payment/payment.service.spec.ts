@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -83,6 +84,7 @@ describe('PaymentService', () => {
 
     ordersRepository.update.mockResolvedValue({ affected: 0 });
     ordersRepository.find.mockResolvedValue([]);
+    ordersRepository.findOne.mockResolvedValue(null);
     ordersRepository.create.mockImplementation((data) => data);
     ordersRepository.save.mockImplementation(async (data) => data);
 
@@ -161,6 +163,81 @@ describe('PaymentService', () => {
 
     expect(result.decimal_ref).toBe(0.02);
     expect(result.total_amount).toBe(100.02);
+  });
+
+  describe('zero_decimal orders', () => {
+    const zeroDecimalDto = {
+      amount: 99,
+      redirect_url: 'https://merchant.example.com/webhooks/apay',
+      zero_decimal: true,
+    };
+
+    it('creates a QR with a .00 total without allocating a decimal reference', async () => {
+      const result = await service.createQrOrder(user, zeroDecimalDto);
+
+      expect(result).toMatchObject({
+        base_amount: 99,
+        decimal_ref: 0,
+        total_amount: 99,
+        status: 'UNVERIFIED',
+      });
+      expect(result.order_id).toMatch(/_99\.00$/);
+      expect(result.lookup_key).toMatch(/_99\.00$/);
+      // ไม่จอง decimal_ref จึงไม่ต้องสแกน slot ที่ถูกใช้อยู่
+      expect(ordersRepository.find).not.toHaveBeenCalled();
+      expect(ordersRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          base_amount: 99,
+          decimal_ref: 0,
+          total_amount: 99,
+          lookup_key: expect.stringMatching(/_99\.00$/),
+        }),
+      );
+    });
+
+    it('checks for a still-pending zero-decimal order of the same amount', async () => {
+      await service.createQrOrder(user, zeroDecimalDto);
+
+      expect(ordersRepository.findOne).toHaveBeenCalledWith({
+        where: {
+          business_id: 'business-1',
+          base_amount: 99,
+          decimal_ref: 0,
+          status: 'UNVERIFIED',
+          expires_at: expect.anything(),
+        },
+        select: { id: true },
+      });
+    });
+
+    it('rejects when the same zero-decimal amount is still pending', async () => {
+      ordersRepository.findOne.mockResolvedValue({ id: 'pending-order' });
+
+      await expect(
+        service.createQrOrder(user, zeroDecimalDto),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(ordersRepository.save).not.toHaveBeenCalled();
+      expect(usageLogsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a fractional amount because the fraction would be dropped', async () => {
+      await expect(
+        service.createQrOrder(user, { ...zeroDecimalDto, amount: 99.5 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
+    it('keeps allocating decimal references when the flag is false', async () => {
+      const result = await service.createQrOrder(user, {
+        ...dto,
+        zero_decimal: false,
+      });
+
+      expect(result.decimal_ref).toBe(0.01);
+      expect(result.total_amount).toBe(100.01);
+      expect(ordersRepository.find).toHaveBeenCalled();
+      expect(ordersRepository.findOne).not.toHaveBeenCalled();
+    });
   });
 
   it('propagates a 403 when the subscription is PAST_DUE', async () => {

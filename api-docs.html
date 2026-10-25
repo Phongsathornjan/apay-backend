@@ -267,7 +267,7 @@
           "3. **Admin หรือ Business** สร้าง API Key ผ่าน `POST /api/v1/api-keys` (ได้ Raw Key `apay_live_<8_hex>_<32_hex>` เพียงครั้งเดียว และจำกัดจำนวนตาม `max_api_keys`)",
           "4. **Business / Merchant** นำ `api_key` มาแลกเป็น JWT (`access_token`, `refresh_token`) ที่ `POST /api/v1/auth/token` (Token จะแนบ `api_key_id`) หรือเข้าสู่ระบบด้วย username/password",
           "5. **ผูก LINE User ID (ครั้งแรกเท่านั้น)**: เรียก `POST /api/v1/payments/line/link-qr` เพื่อสร้าง QR ยืนยันยอด `0.01` - `0.99` แล้วชำระด้วยบัญชีธนาคารที่ LINE KBank แจ้งเตือนเข้า APay — Webhook จะผูก `businesses.line_user_id` ให้อัตโนมัติ (ธุรกิจที่ยังไม่ผูก LINE จะสร้าง QR รับเงินไม่ได้)",
-          "6. **สร้างรายการชำระเงิน PromptPay QR** ที่ `POST /api/v1/payments/qr` ระบบตรวจโควต้า/Rate Limit, จองทศนิยมอ้างอิง (`0.01` - `0.99`) ให้อัตโนมัติ มีอายุ **5 นาที**, บันทึก `line_user_id` และ `QR_CREATED`",
+          "6. **สร้างรายการชำระเงิน PromptPay QR** ที่ `POST /api/v1/payments/qr` ระบบตรวจโควต้า/Rate Limit, จองทศนิยมอ้างอิง (`0.01` - `0.99`) ให้อัตโนมัติ (หรือส่ง `zero_decimal: true` เพื่อสร้างยอดลงท้าย `.00` เช่น `99.00`) มีอายุ **5 นาที**, บันทึก `line_user_id` และ `QR_CREATED`",
           "7. เมื่อลูกค้าโอนเงินและ LINE KBank แจ้งเตือนมายัง `POST /api/v1/webhooks/kbank/line` ระบบจะจับคู่ยอด (`lookup_key = YYYYMMDD_<total_amount>`) **ร่วมกับ `source.userId` (`line_user_id`)** เปลี่ยนสถานะเป็น `PAID`, หักโควต้า 1 ครั้ง, บันทึก `QR_PAID` และยิง Webhook Callback (`event: 'payment.paid'`) ไปยัง `redirect_url` ของออเดอร์นั้นทันที"
         ].join("\n")
       },
@@ -669,13 +669,21 @@
                 type: "number",
                 minimum: 1,
                 example: 100,
-                description: "จำนวนเงินตั้งต้น (ต้อง >= 1 ระบบจะปัดลงเป็นจำนวนเต็ม `base_amount` แล้วบวก `decimal_ref` 0.01–0.99 อัตโนมัติ)"
+                description:
+                  "จำนวนเงินตั้งต้น (ต้อง >= 1) — โหมดปกติระบบจะปัดลงเป็นจำนวนเต็ม `base_amount` แล้วบวก `decimal_ref` 0.01–0.99 อัตโนมัติ; ถ้า `zero_decimal = true` ต้องเป็นจำนวนเต็มเท่านั้น และยอดรวมจะลงท้าย `.00`"
               },
               redirect_url: {
                 type: "string",
                 format: "uri",
                 example: "https://merchant.example.com/webhooks/apay",
                 description: "URL ปลายทางสำหรับรับ HTTP POST Webhook Callback เมื่อการชำระเงินสำเร็จ (`payment.paid`)"
+              },
+              zero_decimal: {
+                type: "boolean",
+                default: false,
+                example: true,
+                description:
+                  "`true` = สร้าง QR แบบไม่มีเศษสตางค์ (ยอดลงท้าย `.00` เช่น `99.00`) โดยไม่จอง `decimal_ref` (`decimal_ref = 0`) เหมาะกับยอดที่ต้องตรงเป๊ะ; `false`/ไม่ส่ง = จอง `decimal_ref` 0.01–0.99 ตามปกติ (ในโหมดนี้ `amount` ต้องเป็นจำนวนเต็ม และธุรกิจต้องไม่มี QR ยอดเดียวกันค้างชำระอยู่)"
               }
             }
           },
@@ -729,7 +737,7 @@
               decimal_ref: {
                 type: "number",
                 example: 0.01,
-                description: "เศษสตางค์อ้างอิงที่ระบบจองให้ (0.01 ถึง 0.99)"
+                description: "เศษสตางค์อ้างอิงที่ระบบจองให้ (0.01 ถึง 0.99) หรือ `0` เมื่อสร้างด้วย `zero_decimal = true` (ยอดลงท้าย `.00`)"
               },
               total_amount: {
                 type: "number",
@@ -2987,6 +2995,7 @@
               "- ตรวจสอบ `quota_remaining > 0` และ Rate Limit ต่อชั่วโมงของ Business (นับจาก `api_key_usage_logs.action = 'QR_CREATED'` ใน 60 นาทีล่าสุด) — เกินจะถูกปฏิเสธ `429`",
               "- ปรับสถานะออเดอร์ `UNVERIFIED` ที่หมดอายุแล้ว (`expires_at <= now`) ให้เป็น `EXPIRED` โดยอัตโนมัติ",
               "- ปัดเศษ `amount` ลงเป็นจำนวนเต็ม (`base_amount`) และจองค่า `decimal_ref` ที่ว่างอยู่ตั้งแต่ `0.01` ถึง `0.99`",
+              "- ถ้าส่ง `zero_decimal: true` จะสร้าง QR แบบไม่มีเศษสตางค์ (ยอดลงท้าย `.00` เช่น `99.00`) โดยตั้ง `decimal_ref = 0` และ **ไม่จอง slot** — `amount` ต้องเป็นจำนวนเต็ม และต้องไม่มี QR ยอดเดียวกันของธุรกิจนี้ค้างชำระอยู่ (มิฉะนั้น `409`)",
               "- คำนวณ `total_amount = base_amount + decimal_ref` และสร้าง PromptPay EMVCo Payload พร้อมรูป Base64 PNG Data URL (`qr_image`)",
               "- บันทึก `payment_orders.line_user_id` = `businesses.line_user_id` และ `is_line_link = false` เพื่อใช้จับคู่ Webhook ร่วมกับ `lookup_key`",
               "- กำหนดเวลาหมดอายุ `expires_at` = 5 นาทีนับจากเวลาที่สร้าง",
@@ -3050,7 +3059,7 @@
                 }
               },
               "400": {
-                description: "จำนวนเงินน้อยกว่า 1 หรือ `redirect_url` ไม่ใช่ URL ที่ถูกต้อง",
+                description: "จำนวนเงินน้อยกว่า 1, `redirect_url` ไม่ใช่ URL ที่ถูกต้อง หรือส่ง `zero_decimal: true` พร้อม `amount` ที่มีเศษสตางค์",
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -3094,7 +3103,7 @@
                 }
               },
               "409": {
-                description: "ทศนิยมอ้างอิง (0.01 - 0.99) สำหรับยอด `base_amount` นี้ถูกใช้งานเต็มทั้ง 99 ช่องในขณะนั้น",
+                description: "ทศนิยมอ้างอิง (0.01 - 0.99) สำหรับยอด `base_amount` นี้ถูกใช้งานเต็มทั้ง 99 ช่องในขณะนั้น หรือมี QR แบบ `zero_decimal` ยอดเดียวกันของธุรกิจนี้ค้างชำระอยู่",
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" },

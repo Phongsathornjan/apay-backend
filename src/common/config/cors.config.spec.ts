@@ -46,20 +46,23 @@ describe('cors.config', () => {
   });
 
   describe('buildCorsOptions', () => {
-    it('allows the localhost frontend origin by default', () => {
+    it('allows every origin by default without credentials', () => {
       const options = buildCorsOptions({} as NodeJS.ProcessEnv);
 
-      expect(checkOrigin(options, 'http://localhost:3001')).toBe(true);
-      expect(options.credentials).toBe(true);
+      expect(options.origin).toBe(true);
+      expect(options.credentials).toBe(false);
       expect(options.methods).toContain('OPTIONS');
       expect(options.allowedHeaders).toEqual(CORS_ALLOWED_HEADERS);
       expect(options.exposedHeaders).toEqual(CORS_EXPOSED_HEADERS);
     });
 
-    it('rejects unknown browser origins', () => {
-      const options = buildCorsOptions({} as NodeJS.ProcessEnv);
+    it('allows every origin when CORS_ORIGINS is blank', () => {
+      const options = buildCorsOptions({
+        CORS_ORIGINS: '  ',
+      } as unknown as NodeJS.ProcessEnv);
 
-      expect(checkOrigin(options, 'https://evil.test')).toBe(false);
+      expect(options.origin).toBe(true);
+      expect(options.credentials).toBe(false);
     });
 
     it('always allows requests without an Origin header (curl, server-to-server)', () => {
@@ -71,6 +74,14 @@ describe('cors.config', () => {
       expect(checkOrigin(options, 'https://app.apay.test')).toBe(true);
       expect(checkOrigin(options, 'https://app.apay.test/')).toBe(true);
       expect(checkOrigin(options, 'http://localhost:3001')).toBe(false);
+    });
+
+    it('rejects origins outside an explicitly configured allowlist', () => {
+      const options = buildCorsOptions({
+        CORS_ORIGINS: 'https://app.apay.test',
+      } as unknown as NodeJS.ProcessEnv);
+
+      expect(checkOrigin(options, 'https://evil.test')).toBe(false);
     });
 
     it('reflects any origin when CORS_ORIGINS is a wildcard', () => {

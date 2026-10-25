@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -116,6 +117,17 @@ export class PaymentService {
     dto: CreateQrDto,
     apiKeyId: string | null,
   ) {
+    const zeroDecimal = dto.zero_decimal === true;
+    const baseAmount = Math.floor(dto.amount);
+
+    // โหมดไม่มีทศนิยมต้องใช้ยอดเต็มจำนวนเท่านั้น เพื่อไม่ให้เศษที่ถูกปัดทิ้ง
+    // ทำให้ผู้เรียกเข้าใจยอดผิด (เช่นส่ง 99.50 แล้วได้ QR 99.00)
+    if (zeroDecimal && baseAmount !== dto.amount) {
+      throw new BadRequestException(
+        'amount must be a whole number when zero_decimal is true',
+      );
+    }
+
     return this.dataSource.transaction(async (manager) => {
       const ordersRepository = manager.getRepository(PaymentOrder);
       const now = new Date();
@@ -134,11 +146,23 @@ export class PaymentService {
         { status: PaymentOrderStatusEnum.EXPIRED },
       );
 
-      const baseAmount = Math.floor(dto.amount);
-      const decimalRef = await this.allocateDecimalRef(
-        ordersRepository,
-        baseAmount,
-      );
+      let decimalRef: number;
+
+      if (zeroDecimal) {
+        // `decimal_ref = 0` หมายถึงยอดลงท้าย `.00` — ต้องกันไม่ให้มี QR
+        // ยอดเดียวกันค้างอยู่พร้อมกัน เพราะ `lookup_key` จะซ้ำกันจนจับคู่ไม่ได้
+        await this.assertNoPendingZeroDecimalOrder(
+          ordersRepository,
+          business.id,
+          baseAmount,
+        );
+        decimalRef = 0;
+      } else {
+        decimalRef = await this.allocateDecimalRef(
+          ordersRepository,
+          baseAmount,
+        );
+      }
 
       const totalAmount = Number((baseAmount + decimalRef).toFixed(2));
       const { dateStr, timeStr } = getBangkokParts(now);
@@ -313,5 +337,33 @@ export class PaymentService {
     throw new ConflictException(
       'No available decimal reference slot for this amount, please retry shortly',
     );
+  }
+
+  /**
+   * โหมดไม่มีทศนิยม (`decimal_ref = 0`) ใช้ยอดเดียวกับ `base_amount` ตรง ๆ
+   * จึงต้องมี QR ค้างชำระ (UNVERIFIED + ยังไม่หมดอายุ) ได้ครั้งละ 1 ใบต่อยอด
+   * ต่อธุรกิจเท่านั้น มิฉะนั้น `lookup_key` จะซ้ำกันและ Webhook จับคู่ผิดใบ
+   */
+  private async assertNoPendingZeroDecimalOrder(
+    ordersRepository: Repository<PaymentOrder>,
+    businessId: string,
+    baseAmount: number,
+  ): Promise<void> {
+    const pendingOrder = await ordersRepository.findOne({
+      where: {
+        business_id: businessId,
+        base_amount: baseAmount,
+        decimal_ref: 0,
+        status: PaymentOrderStatusEnum.UNVERIFIED,
+        expires_at: MoreThan(new Date()),
+      },
+      select: { id: true },
+    });
+
+    if (pendingOrder) {
+      throw new ConflictException(
+        'A QR for this amount is already pending, please wait until it expires or create the QR with decimal reference',
+      );
+    }
   }
 }

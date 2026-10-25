@@ -98,6 +98,29 @@ describe('PaymentController', () => {
     expect(result).toEqual({ order_id: 'ord-1' });
   });
 
+  it('forwards the zero_decimal flag when creating a QR', async () => {
+    const dto = {
+      amount: 99,
+      redirect_url: 'https://example.com/cb',
+      zero_decimal: true,
+    };
+    paymentService.createQrOrder.mockResolvedValue({
+      order_id: 'ord-99.00',
+      decimal_ref: 0,
+    });
+
+    const result = await controller.createQr(
+      { user: businessUser } as any,
+      dto,
+    );
+
+    expect(paymentService.createQrOrder).toHaveBeenCalledWith(
+      businessUser,
+      expect.objectContaining({ zero_decimal: true, amount: 99 }),
+    );
+    expect(result).toEqual({ order_id: 'ord-99.00', decimal_ref: 0 });
+  });
+
   it('delegates createLineLinkQr to PaymentService.createLineLinkOrder', async () => {
     const dto = { redirect_url: 'http://localhost:3001/api/line-link/callback' };
     paymentService.createLineLinkOrder.mockResolvedValue({

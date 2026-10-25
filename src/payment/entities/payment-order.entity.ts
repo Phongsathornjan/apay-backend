@@ -75,6 +75,11 @@ export class PaymentOrder {
   })
   base_amount: number;
 
+  /**
+   * เศษสตางค์อ้างอิงที่จองไว้เพื่อแยกออเดอร์ที่มียอดฐาน (base_amount) เดียวกัน
+   * - `0.01` - `0.99` = ออเดอร์ปกติ (ยอดรวมมีเศษสตางค์)
+   * - `0` = ออเดอร์ที่สร้างด้วย `zero_decimal = true` (ยอดลงท้าย `.00` เช่น 99.00)
+   */
   @Column({
     type: 'numeric',
     precision: 4,

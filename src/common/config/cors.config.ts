@@ -1,17 +1,7 @@
 import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 
-/**
- * Origins allowed when `CORS_ORIGINS` is not set.
- * Covers the local frontend dev servers (Next.js/Vite commonly on 3001) and the API itself.
- */
-export const DEFAULT_CORS_ORIGINS: string[] = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'http://localhost:3001',
-  'http://127.0.0.1:3001',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-];
+/** Origins allowed when `CORS_ORIGINS` is not set. */
+export const DEFAULT_CORS_ORIGINS: string[] = ['*'];
 
 export const CORS_ALLOWED_HEADERS: string[] = [
   'Accept',
@@ -56,10 +46,10 @@ export function parseCorsOrigins(raw?: string | null): string[] {
 export function buildCorsOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): CorsOptions {
-  const allowAll =
-    env.CORS_ORIGINS?.trim() === '*' ||
-    env.CORS_ALLOW_ALL?.trim().toLowerCase() === 'true';
   const origins = parseCorsOrigins(env.CORS_ORIGINS);
+  const allowAll =
+    origins.includes('*') ||
+    env.CORS_ALLOW_ALL?.trim().toLowerCase() === 'true';
 
   return {
     origin: allowAll

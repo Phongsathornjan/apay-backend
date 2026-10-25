@@ -32,6 +32,7 @@ README.md
 AGENTS.md
 api-docs.html
 migrations
+.opencode
 
 # docker meta
 Dockerfile

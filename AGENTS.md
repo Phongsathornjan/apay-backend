@@ -6,6 +6,8 @@
 > 2. อัปเดตไฟล์ `api-docs.html` (Interactive Swagger UI) ให้ตรงกับ API Endpoint, Request/Response DTO และ Schema ล่าสุด
 > 3. เขียนหรืออัปเดต unit test ในไฟล์ `*.spec.ts` ทุกครั้งที่มีการ implement หรือแก้ไขโค้ด
 > *(Whenever any business logic, database entity/schema, API endpoint, or execution flow is added or modified, you MUST update BOTH this `AGENTS.md` file AND `api-docs.html` in the same task. In addition, every implementation or code change MUST include new/updated unit tests in a `*.spec.ts` file.)*
+>
+> **Cross-repo sync ของ `api-docs.html` ไม่อยู่ในไฟล์นี้แล้ว** — ย้ายไปเป็น project skill ที่ [`.opencode/skills/sync-api-docs/SKILL.md`](.opencode/skills/sync-api-docs/SKILL.md) (skill id: `sync-api-docs`) ให้โหลด skill นี้ทุกครั้งที่ `api-docs.html` เปลี่ยน
 
 ## Commands
 
@@ -53,7 +55,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 ## Architecture & Conventions
 
 - **Routing & Versioning**: Global prefix is `/api` with URI versioning enabled (`src/main.ts`). Controllers declaring `@Controller({ path: '...', version: '1' })` are served at `/api/v1/...`.
-- **API Documentation (`api-docs.html`)**: Standalone interactive Swagger UI (`OpenAPI 3.0.3`) specification file at the project root covering all `/api/v1/...` endpoints, schemas, and webhook callbacks. Keep `api-docs.html` updated whenever endpoints or DTOs change.
+- **API Documentation (`api-docs.html`)**: Standalone interactive Swagger UI (`OpenAPI 3.0.3`) specification file at the project root covering all `/api/v1/...` endpoints, schemas, and webhook callbacks. Keep `api-docs.html` updated whenever endpoints or DTOs change. **Whenever this file changes you must also mirror it into the `apay-backoffice` repo — load the project skill `sync-api-docs` (`.opencode/skills/sync-api-docs/SKILL.md`).**
 - **Response & Error Envelope**:
   - Success responses are automatically wrapped by global `ResponseInterceptor` into `{ ok: true, status, correlation_id, data }`. Return raw data from controllers—do not manually wrap with `{ ok, data }`.
   - `HttpException` errors are formatted by global `HttpErrorFilter` into `{ ok: false, status, correlation_id, message }`.
@@ -64,8 +66,8 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
     - `maskHeaders` masks sensitive header values (`Authorization`, `Cookie`, `Set-Cookie`, `x-api-key`, `X-Refresh-Token`, `x-line-signature`, ...) case-insensitively as `<first 8>***<last 4>` (`***` for short values), then passes the remaining values through `maskBody` so PII in custom headers is masked too.
 - **Raw Body Requirement**: `NestFactory.create(AppModule, { rawBody: true })` is required so `request.rawBody` is available for LINE webhook HMAC-SHA256 signature verification.
 - **CORS (`src/common/config/cors.config.ts`)**: `main.ts` calls `app.enableCors(buildCorsOptions())` **before** the correlation-id middleware so browser clients (frontend `http://localhost:3001`) can call the API and preflight `OPTIONS` requests succeed.
-  - Allowed origins come from `CORS_ORIGINS` (comma-separated, trailing slashes stripped). When unset/blank it falls back to `DEFAULT_CORS_ORIGINS`: `http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:3001`, `http://127.0.0.1:3001`, `http://localhost:5173`, `http://127.0.0.1:5173`.
-  - `CORS_ORIGINS=*` or `CORS_ALLOW_ALL=true` reflects any origin, but then `credentials` is forced to `false` (browsers reject `*` + credentials).
+  - Allowed origins come from `CORS_ORIGINS` (comma-separated, trailing slashes stripped). When unset/blank it falls back to `DEFAULT_CORS_ORIGINS = ['*']`, allowing any origin by default.
+  - `CORS_ORIGINS=*` or `CORS_ALLOW_ALL=true` reflects any origin, but then `credentials` is forced to `false` (browsers reject `*` + credentials). A specific `CORS_ORIGINS` list keeps credentials enabled and rejects origins outside the list.
   - Requests without an `Origin` header (curl, server-to-server, LINE webhook, payment callback) are always allowed.
   - `allowedHeaders`: `Accept`, `Authorization`, `Content-Type`, `Origin`, `X-Requested-With`, `x-api-key`, `x-correlation-id`; `exposedHeaders`: `x-correlation-id`, `Content-Length`; `maxAge` is 24h. Add any new custom request header to `CORS_ALLOWED_HEADERS` or browsers will block it.
 - **Central Enums (`src/enums/`)**: ทุกค่า enum ของระบบ (role + คอลัมน์ที่เป็น enum ใน DB) ถูกประกาศที่ `src/enums/*.enum.ts` และ re-export ผ่าน barrel `src/enums/index.ts`:
@@ -147,7 +149,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 ### 5. Payment Orders & PromptPay QR (`src/payment/`)
 - **Endpoints (`/api/v1/payments`)**:
   - `POST /line/link-qr` (`business`, `admin`): Creates a LINE-linking verification order (`is_line_link = true`) with a total amount between **0.01 and 0.99** (`base_amount = 0`, `decimal_ref` allocated from `0.01`–`0.99`). It does **not** check quota/rate limit, does **not** write usage logs, and does not attach an `api_key_id`. **Optional body** `{ redirect_url }` (`CreateLinkQrDto`, `@IsUrl({ require_tld: false })`, max 2048): when the QR is paid the backend POSTs a `line.linked` callback to it (5s timeout, records `callback_sent` / `callback_status_code`); without it there is no callback. Throws `409 Conflict` when the business already has `line_user_id`.
-  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. **Requires `businesses.line_user_id` to be set** (otherwise `403 ForbiddenException('Business is not linked to a LINE user yet; ...')`), and stores it on `payment_orders.line_user_id` (`is_line_link = false`). Also requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). If the JWT contains `api_key_id`, the key must still be active/not deleted and belong to the business, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
+  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. **Requires `businesses.line_user_id` to be set** (otherwise `403 ForbiddenException('Business is not linked to a LINE user yet; ...')`), and stores it on `payment_orders.line_user_id` (`is_line_link = false`). Also requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). **Optional `zero_decimal: true`** (`CreateQrDto`, `@IsBoolean`, default `false`): creates a QR with a whole-baht total (`.00`, e.g. `99.00`) instead of allocating a decimal reference — `amount` must then be a whole number (otherwise `400 BadRequestException`) and the business must not already have a pending zero-decimal order for that same `base_amount` (otherwise `409 Conflict`). If the JWT contains `api_key_id`, the key must still be active/not deleted and belong to the business, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
   - `GET /orders/:id` (`business`, `admin`): Returns order details including `line_user_id` and `is_line_link` (`business` users must have a valid `businessId` matching `order.business_id`, otherwise `404`).
 - **LINE Linking Flow**:
   - An unlinked business calls `POST /line/link-qr` and pays the generated QR (0.01–0.99) with the KBank account whose LINE notifications are forwarded to APay. Passing `redirect_url` in the body makes the backend POST a `line.linked` callback (5s timeout) after the binding succeeds — the backoffice uses it to relay the result to the browser over SSE; polling remains the fallback.
@@ -156,6 +158,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - **Order Allocation Logic (`PaymentService`)**:
   - Lazily marks any `UNVERIFIED` orders with `expires_at <= now` as `EXPIRED` before allocating.
   - Floors input `amount` (`>= 1`) to integer `base_amount` and allocates the lowest unused `decimal_ref` from `0.01` to `0.99` (`MAX_DECIMAL_REF = 99`) among active `UNVERIFIED` orders with the same `base_amount`. Throws `409 Conflict` if all 99 slots are occupied. LINE-linking orders use `base_amount = 0`, so their 0.01–0.99 slots never collide with normal orders.
+  - **Zero-decimal mode (`zero_decimal = true`)**: skips slot allocation and sets `decimal_ref = 0`, so `total_amount = base_amount` (e.g. `99.00`). Because the `lookup_key` would otherwise collide, `createOrder` first rejects with `400` when `amount` is not a whole number and with `409` when the same business still has an `UNVERIFIED`, unexpired zero-decimal order for that `base_amount` (`assertNoPendingZeroDecimalOrder`). Webhook matching needs no change — `lookup_key` still equals `YYYYMMDD_<total_amount>`, e.g. `20261025_99.00`.
   - `total_amount = base_amount + decimal_ref`. QR TTL is **5 minutes** (`QR_TTL_MS`).
   - Uses `Asia/Bangkok` (`UTC+7`, `src/common/utils/datetime.util.ts`) to construct:
     - `order.id`: `YYYYMMDDHHmmss_<total_amount.toFixed(2)>`
@@ -220,7 +223,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - `JWT_SECRET` / `JWT_REFRESH_SECRET`: Secrets for access and refresh tokens (`JWT_EXPIRES_IN` defaults to `15m`, `JWT_REFRESH_EXPIRES_IN` defaults to `7d`).
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD`: Used by `DatabaseSeederService` to seed the initial `admin` user and by `pnpm create:admin` (`scripts/create-admin.mts`) to create/update an admin user on demand.
 - `VERIFY_LINE_SIGNATURE`: Set to `'true'` to enforce `x-line-signature` verification using `LINE_CHANNEL_SECRET`.
-- `CORS_ORIGINS`: Comma-separated list of browser origins allowed to call the API (e.g. `http://localhost:3001,https://app.apay.com`). Defaults to the local dev origins. `*` allows any origin (forces `credentials: false`).
+- `CORS_ORIGINS`: Comma-separated list of browser origins allowed to call the API (e.g. `http://localhost:3001,https://app.apay.com`). Defaults to `*` (any origin; forces `credentials: false`). Set a specific list to restrict origins.
 - `CORS_ALLOW_ALL`: Set to `'true'` as an alternative to `CORS_ORIGINS=*`.
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `SMTP_FROM_NAME`: SMTP credentials for sending self-registration OTP emails (`src/mail/mail.service.ts`). `SMTP_PORT` defaults to `587`, `SMTP_SECURE` (`'true'`) defaults to off but is forced on when the port is `465`, and `SMTP_FROM` falls back to `SMTP_USER`. If `SMTP_HOST` or the from address is missing, `POST /auth/register-business/request-otp` returns `503` ("Email service is not configured").
 - `OTP_TTL_MINUTES` / `OTP_MAX_ATTEMPTS` / `OTP_RESEND_COOLDOWN_SECONDS` / `OTP_MAX_REQUESTS_PER_HOUR`: OTP policy for self-registration (defaults `10`, `5`, `60`, `5`).
