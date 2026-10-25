@@ -24,6 +24,12 @@ export type { PaymentOrderStatus };
 @Index('idx_payment_orders_business', ['business_id', 'status', 'expires_at'])
 @Index('idx_payment_orders_business_created', ['business_id', 'created_at'])
 @Index('idx_payment_orders_business_paid', ['business_id', 'paid_at'])
+@Index('idx_payment_orders_line_lookup', [
+  'line_user_id',
+  'lookup_key',
+  'status',
+  'expires_at',
+])
 export class PaymentOrder {
   @PrimaryColumn({ type: 'varchar', length: 64 })
   id: string;
@@ -44,6 +50,21 @@ export class PaymentOrder {
   @ManyToOne(() => ApiKey, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'api_key_id' })
   api_key: ApiKey | null;
+
+  /**
+   * LINE User ID ที่ผูกกับ Order นี้ ใช้จับคู่ Webhook เพิ่มเติมจาก `lookup_key`
+   * - Order รับเงินปกติ: บันทึกจาก `businesses.line_user_id` ตอนสร้าง QR (ลูกค้าต้องมีค่า)
+   * - Order สำหรับผูก LINE (`is_line_link = true`): เป็น `null` จนกว่า Webhook จะมาผูกให้
+   */
+  @Column({ type: 'varchar', length: 64, name: 'line_user_id', nullable: true })
+  line_user_id: string | null;
+
+  /**
+   * `true` = QR ยืนยันสำหรับผูก LINE User ID เข้ากับ Business (ยอด 0.01 - 0.99)
+   * `false` = QR รับเงินปกติ
+   */
+  @Column({ type: 'boolean', name: 'is_line_link', default: false })
+  is_line_link: boolean;
 
   @Column({
     type: 'numeric',
@@ -75,8 +96,8 @@ export class PaymentOrder {
   @Column({ type: 'text', name: 'qr_payload' })
   qr_payload: string;
 
-  @Column({ type: 'text', name: 'redirect_url' })
-  redirect_url: string;
+  @Column({ type: 'text', name: 'redirect_url', nullable: true })
+  redirect_url: string | null;
 
   @Column({
     type: 'varchar',

@@ -170,6 +170,7 @@ describe('AuthService', () => {
       businessService.findByUserId.mockResolvedValue({
         id: 'business-1',
         is_active: true,
+        line_user_id: 'U-owner',
       });
 
       const result = await service.login({
@@ -182,6 +183,7 @@ describe('AuthService', () => {
         username: 'merchant',
         role: RoleEnum.BUSINESS,
         business_id: 'business-1',
+        line_user_id: 'U-owner',
       });
       expect(businessService.updateRefreshTokenHash).toHaveBeenCalledWith(
         'business-1',
@@ -260,6 +262,7 @@ describe('AuthService', () => {
         expect.objectContaining({
           api_key_prefix: null,
           api_key_hash: null,
+          line_user_id: null,
         }),
       );
       expect(result).toMatchObject({
@@ -267,6 +270,7 @@ describe('AuthService', () => {
         username: 'merchant',
         role: 'business',
         business_id: 'business-1',
+        line_user_id: null,
       });
       expect(result).not.toHaveProperty('api_key');
       expect(dataSource.transaction).toHaveBeenCalledTimes(1);
@@ -281,9 +285,13 @@ describe('AuthService', () => {
         password: 'StrongPass123!',
         business_name: 'Coffee Shop',
         promptpay_id: '0812345678',
+        line_user_id: 'U-owner',
         package_id: 'package-1',
       });
 
+      expect(businessesRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ line_user_id: 'U-owner' }),
+      );
       expect(dataSource.transaction).toHaveBeenCalledTimes(1);
       expect(
         subscriptionsService.assignOrChangePackage,

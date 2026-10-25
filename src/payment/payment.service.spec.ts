@@ -111,6 +111,7 @@ describe('PaymentService', () => {
       id: 'business-1',
       is_active: true,
       promptpay_id: '0812345678',
+      line_user_id: 'U-business-owner',
     });
     apiKeysRepository.findOne.mockResolvedValue({
       id: 'key-1',
@@ -132,10 +133,16 @@ describe('PaymentService', () => {
       total_amount: 100.01,
       status: 'UNVERIFIED',
       api_key_id: 'key-1',
+      line_user_id: 'U-business-owner',
+      is_line_link: false,
     });
     expect(result.order_id).toEqual(expect.any(String));
     expect(ordersRepository.save).toHaveBeenCalledWith(
-      expect.objectContaining({ api_key_id: 'key-1' }),
+      expect.objectContaining({
+        api_key_id: 'key-1',
+        line_user_id: 'U-business-owner',
+        is_line_link: false,
+      }),
     );
     expect(usageLogsRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -185,6 +192,100 @@ describe('PaymentService', () => {
     expect(result.api_key_id).toBeNull();
     expect(usageLogsRepository.save).not.toHaveBeenCalled();
     expect(apiKeysRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects QR creation when the business has not linked a LINE user yet', async () => {
+    businessService.findById.mockResolvedValue({
+      id: 'business-1',
+      is_active: true,
+      promptpay_id: '0812345678',
+      line_user_id: null,
+    });
+
+    await expect(service.createQrOrder(user, dto)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  describe('createLineLinkOrder', () => {
+    it('creates a 0.01 - 0.99 verification order without quota checks', async () => {
+      businessService.findById.mockResolvedValue({
+        id: 'business-1',
+        is_active: true,
+        promptpay_id: '0812345678',
+        line_user_id: null,
+      });
+
+      const result = await service.createLineLinkOrder(user);
+
+      expect(
+        subscriptionsService.assertQuotaAndRateLimit,
+      ).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        base_amount: 0,
+        decimal_ref: 0.01,
+        total_amount: 0.01,
+        status: 'UNVERIFIED',
+        api_key_id: null,
+        line_user_id: null,
+        is_line_link: true,
+        redirect_url: null,
+      });
+      expect(ordersRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          is_line_link: true,
+          line_user_id: null,
+          base_amount: 0,
+        }),
+      );
+      expect(usageLogsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('allocates the next free sub-1 baht slot', async () => {
+      businessService.findById.mockResolvedValue({
+        id: 'business-1',
+        is_active: true,
+        promptpay_id: '0812345678',
+        line_user_id: null,
+      });
+      ordersRepository.find.mockResolvedValue([{ decimal_ref: 0.01 }]);
+
+      const result = await service.createLineLinkOrder(user);
+
+      expect(result.decimal_ref).toBe(0.02);
+      expect(result.total_amount).toBe(0.02);
+    });
+
+    it('stores redirect_url so the callback can be fired once the link order is paid', async () => {
+      businessService.findById.mockResolvedValue({
+        id: 'business-1',
+        is_active: true,
+        promptpay_id: '0812345678',
+        line_user_id: null,
+      });
+
+      const result = await service.createLineLinkOrder(user, {
+        redirect_url: 'http://localhost:3001/api/line-link/callback',
+      });
+
+      expect(result.redirect_url).toBe(
+        'http://localhost:3001/api/line-link/callback',
+      );
+      expect(ordersRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          redirect_url: 'http://localhost:3001/api/line-link/callback',
+          is_line_link: true,
+        }),
+      );
+    });
+
+    it('rejects when the business is already linked to a LINE user', async () => {
+      await expect(service.createLineLinkOrder(user)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects when the business account is not active', async () => {

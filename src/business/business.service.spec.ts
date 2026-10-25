@@ -33,7 +33,7 @@ describe('BusinessService', () => {
     service = module.get<BusinessService>(BusinessService);
   });
 
-  it('finds business by id, userId, and line_destination', async () => {
+  it('finds business by id, userId, line_destination and line_user_id', async () => {
     businessRepository.findOne.mockResolvedValue({ id: 'biz-1' });
 
     await service.findById('biz-1');
@@ -49,6 +49,11 @@ describe('BusinessService', () => {
     await service.findByLineDestination('U123456');
     expect(businessRepository.findOne).toHaveBeenLastCalledWith({
       where: { line_destination: 'U123456' },
+    });
+
+    await service.findByLineUserId('U123456');
+    expect(businessRepository.findOne).toHaveBeenLastCalledWith({
+      where: { line_user_id: 'U123456' },
     });
   });
 

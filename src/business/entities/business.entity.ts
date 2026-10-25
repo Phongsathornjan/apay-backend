@@ -54,6 +54,14 @@ export class Business {
   @Column({ type: 'varchar', length: 64, name: 'line_destination', nullable: true })
   line_destination: string | null;
 
+  /**
+   * LINE User ID ของเจ้าของธุรกิจ (ได้มาจากการผูกผ่าน QR ยืนยัน 0.01 - 0.99)
+   * เป็น `null` จนกว่าจะผูกสำเร็จ และธุรกิจที่ยังไม่ผูกจะสร้าง QR รับเงินไม่ได้
+   */
+  @Index('idx_businesses_line_user_id', { unique: true })
+  @Column({ type: 'varchar', length: 64, name: 'line_user_id', nullable: true })
+  line_user_id: string | null;
+
   @Column({ type: 'boolean', name: 'is_active', default: true })
   is_active: boolean;
 

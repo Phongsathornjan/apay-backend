@@ -1,0 +1,39 @@
+# dependencies & build output (ติดตั้ง/compile ใหม่ใน container)
+node_modules
+**/node_modules
+dist
+*.tsbuildinfo
+
+# git / editor / OS
+.git
+.gitignore
+.github
+.vscode
+.idea
+*.swp
+.DS_Store
+Thumbs.db
+
+# secrets & local env (ห้าม bake เข้า image)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# test / tooling ที่ไม่ต้องใช้ตอน build image
+coverage
+test
+**/*.spec.ts
+jest.config.ts
+test/jest-e2e.json
+oxlint.json
+README.md
+AGENTS.md
+api-docs.html
+migrations
+
+# docker meta
+Dockerfile
+.dockerignore
+docker-compose*.yml

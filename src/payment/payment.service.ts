@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -16,6 +17,7 @@ import { BusinessService } from '../business/business.service';
 import { getBangkokParts } from '../common/utils/datetime.util';
 import { ApiKeyUsageActionEnum, PaymentOrderStatusEnum } from '../enums';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { CreateLinkQrDto } from './dto/create-link-qr.dto';
 import { CreateQrDto } from './dto/create-qr.dto';
 import { PaymentOrder } from './entities/payment-order.entity';
 
@@ -35,6 +37,37 @@ export class PaymentService {
   ) {}
 
   async createQrOrder(user: AuthUser, dto: CreateQrDto) {
+    const business = await this.resolveActiveBusiness(user);
+
+    // ต้องผูก LINE User ID ก่อน จึงจะสร้าง QR รับเงินได้
+    if (!business.line_user_id) {
+      throw new ForbiddenException(
+        'Business is not linked to a LINE user yet; please link LINE before creating a QR',
+      );
+    }
+
+    return this.createOrder(business, dto, user.apiKeyId ?? null);
+  }
+
+  /**
+   * สร้าง QR ยืนยันสำหรับผูก LINE User ID เข้ากับ Business (ยอด 0.01 - 0.99)
+   * เมื่อมี Webhook เงินเข้าที่มียอด/เวลาตรงกัน ระบบจะผูก `businesses.line_user_id`
+   * ด้วย `source.userId` ของ LINE event นั้น
+   *
+   * ถ้าส่ง `redirect_url` มา ระบบจะยิง callback (event `line.linked`)
+   * เมื่อ QR นี้ถูกชำระสำเร็จ เพื่อให้ client รู้ผลทันทีโดยไม่ต้อง polling
+   */
+  async createLineLinkOrder(user: AuthUser, dto: CreateLinkQrDto = {}) {
+    const business = await this.resolveActiveBusiness(user);
+
+    if (business.line_user_id) {
+      throw new ConflictException('Business is already linked to a LINE user');
+    }
+
+    return this.createLinkOrder(business, dto.redirect_url ?? null);
+  }
+
+  private async resolveActiveBusiness(user: AuthUser): Promise<Business> {
     const businessId =
       user.businessId ?? (await this.businessService.findByUserId(user.userId))?.id;
 
@@ -61,7 +94,7 @@ export class PaymentService {
       }
     }
 
-    return this.createOrder(business, dto, user.apiKeyId ?? null);
+    return business;
   }
 
   async findOrderById(orderId: string): Promise<PaymentOrder | null> {
@@ -124,6 +157,8 @@ export class PaymentService {
         lookup_key: lookupKey,
         business_id: business.id,
         api_key_id: apiKeyId,
+        line_user_id: business.line_user_id,
+        is_line_link: false,
         base_amount: baseAmount,
         decimal_ref: decimalRef,
         total_amount: totalAmount,
@@ -168,6 +203,82 @@ export class PaymentService {
         redirect_url: order.redirect_url,
         expires_at: order.expires_at,
         api_key_id: order.api_key_id,
+        line_user_id: order.line_user_id,
+        is_line_link: order.is_line_link,
+      };
+    });
+  }
+
+  /**
+   * Order สำหรับผูก LINE: ยอด 0.01 - 0.99 (ไม่คิดโควต้า/rate limit)
+   * ยังไม่ทราบ LINE User ID ตอนสร้าง จึงเว้น `line_user_id` เป็น `null`
+   * `redirectUrl` (optional) ใช้รับ callback `line.linked` เมื่อชำระสำเร็จ
+   */
+  private async createLinkOrder(business: Business, redirectUrl: string | null) {
+    return this.dataSource.transaction(async (manager) => {
+      const ordersRepository = manager.getRepository(PaymentOrder);
+      const now = new Date();
+
+      await ordersRepository.update(
+        {
+          status: PaymentOrderStatusEnum.UNVERIFIED,
+          expires_at: LessThanOrEqual(now),
+        },
+        { status: PaymentOrderStatusEnum.EXPIRED },
+      );
+
+      const baseAmount = 0;
+      const decimalRef = await this.allocateDecimalRef(
+        ordersRepository,
+        baseAmount,
+      );
+      const totalAmount = Number(decimalRef.toFixed(2));
+      const { dateStr, timeStr } = getBangkokParts(now);
+      const amountStr = totalAmount.toFixed(2);
+      const orderId = `${dateStr}${timeStr}_${amountStr}`;
+      const lookupKey = `${dateStr}_${amountStr}`;
+      const expiresAt = new Date(now.getTime() + QR_TTL_MS);
+
+      const qrPayload = generatePayload(business.promptpay_id, {
+        amount: totalAmount,
+      });
+      const qrImage = await toDataURL(qrPayload);
+
+      const order = ordersRepository.create({
+        id: orderId,
+        lookup_key: lookupKey,
+        business_id: business.id,
+        api_key_id: null,
+        line_user_id: null,
+        is_line_link: true,
+        base_amount: baseAmount,
+        decimal_ref: decimalRef,
+        total_amount: totalAmount,
+        qr_payload: qrPayload,
+        redirect_url: redirectUrl,
+        status: PaymentOrderStatusEnum.UNVERIFIED,
+        callback_sent: false,
+        callback_status_code: null,
+        expires_at: expiresAt,
+        paid_at: null,
+      });
+
+      await ordersRepository.save(order);
+
+      return {
+        order_id: orderId,
+        lookup_key: lookupKey,
+        base_amount: baseAmount,
+        decimal_ref: decimalRef,
+        total_amount: totalAmount,
+        qr_payload: qrPayload,
+        qr_image: qrImage,
+        status: order.status,
+        redirect_url: order.redirect_url,
+        expires_at: order.expires_at,
+        api_key_id: order.api_key_id,
+        line_user_id: order.line_user_id,
+        is_line_link: order.is_line_link,
       };
     });
   }

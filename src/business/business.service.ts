@@ -26,6 +26,12 @@ export class BusinessService {
     });
   }
 
+  findByLineUserId(lineUserId: string): Promise<Business | null> {
+    return this.businessRepository.findOne({
+      where: { line_user_id: lineUserId },
+    });
+  }
+
   assertBusinessAccess(user: AuthUser, businessId: string): void {
     if (
       user.role === RoleEnum.BUSINESS &&

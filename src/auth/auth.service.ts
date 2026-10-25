@@ -82,6 +82,7 @@ export class AuthService {
 
     const role = user.role.name as UserRole;
     let businessId: string | null = null;
+    let lineUserId: string | null = null;
 
     if (role === RoleEnum.BUSINESS) {
       const business = await this.businessService.findByUserId(user.id);
@@ -91,6 +92,7 @@ export class AuthService {
       }
 
       businessId = business.id;
+      lineUserId = business.line_user_id ?? null;
     }
 
     const tokens = await this.signTokenBundle({
@@ -113,6 +115,7 @@ export class AuthService {
         username: user.username,
         role,
         business_id: businessId,
+        line_user_id: lineUserId,
       },
     };
   }
@@ -165,6 +168,7 @@ export class AuthService {
           api_key_prefix: null,
           api_key_hash: null,
           line_destination: dto.line_destination ?? null,
+          line_user_id: dto.line_user_id ?? null,
           is_active: true,
         }),
       );
@@ -188,6 +192,7 @@ export class AuthService {
         business_id: business.id,
         business_name: business.business_name,
         promptpay_id: business.promptpay_id,
+        line_user_id: business.line_user_id,
       };
     });
   }

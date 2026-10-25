@@ -5,8 +5,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { AxiosError } from 'axios';
 import { createHmac } from 'node:crypto';
 import { firstValueFrom } from 'rxjs';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { ApiKeyUsageLog } from '../api-keys/entities/api-key-usage-log.entity';
+import { Business } from '../business/entities/business.entity';
 import { safeCompare } from '../common/utils/crypto.util';
 import {
   ApiKeyUsageActionEnum,
@@ -27,7 +28,11 @@ import {
 
 interface CallbackPayload {
   ok: boolean;
-  event: 'payment.paid';
+  /**
+   * `payment.paid` = QR รับเงินปกติ
+   * `line.linked`  = QR ยืนยันการผูก LINE (ยอด 0.01 - 0.99) ถูกชำระแล้ว
+   */
+  event: 'payment.paid' | 'line.linked';
   order_id: string;
   lookup_key: string;
   business_id: string;
@@ -36,6 +41,7 @@ interface CallbackPayload {
   total_amount: number;
   status: string;
   paid_at: Date | null;
+  is_line_link: boolean;
 }
 
 @Injectable()
@@ -100,48 +106,63 @@ export class WebhookService {
         continue;
       }
 
-      await this.processEvent(event);
+      await this.processEvent(event, event.source?.userId);
       processed += 1;
     }
 
     return { processed };
   }
 
-  private async processEvent(event: LineWebhookEvent): Promise<void> {
+  private async processEvent(
+    event: LineWebhookEvent,
+    lineUserId?: string,
+  ): Promise<void> {
     const messageId = event.message?.id as string;
     const text = event.message?.text ?? '';
     const rawPayload = event as unknown as Record<string, unknown>;
     const parsed = parseKBankMessage(text, event.timestamp);
 
-    if (!parsed) {
+    // ต้องมี LINE User ID (source.userId) เพื่อใช้จับคู่/ผูก Business เสมอ
+    if (!parsed || !lineUserId) {
       await this.saveLog({
         line_message_id: messageId,
+        parsed_amount: parsed ? Number(parsed.amount) : null,
+        parsed_datetime: parsed?.datetimeStr ?? null,
         raw_payload: rawPayload,
         process_status: WebhookProcessStatusEnum.NO_MATCH,
       });
       return;
     }
 
-    const order = await this.matchAndMarkPaid(parsed, messageId, rawPayload);
+    const order = await this.matchAndMarkPaid(
+      parsed,
+      lineUserId,
+      messageId,
+      rawPayload,
+    );
 
-    if (order) {
+    if (order && order.redirect_url) {
       await this.sendCallback(order);
     }
   }
 
   private async matchAndMarkPaid(
     parsed: ParsedKBankMessage,
+    lineUserId: string,
     messageId: string,
     rawPayload: Record<string, unknown>,
   ): Promise<PaymentOrder | null> {
     const lookupKey = `${parsed.dateStr}_${parsed.amount}`;
 
     return this.dataSource.transaction(async (manager) => {
-      const order = await manager
-        .getRepository(PaymentOrder)
+      const ordersRepository = manager.getRepository(PaymentOrder);
+
+      // 1) จับคู่ Order รับเงินปกติ ด้วย lookupKey + lineUserId (หลังผูก LINE แล้ว)
+      let order = await ordersRepository
         .createQueryBuilder('order')
         .setLock('pessimistic_write')
         .where('order.lookup_key = :lookupKey', { lookupKey })
+        .andWhere('order.line_user_id = :lineUserId', { lineUserId })
         .andWhere('order.status = :status', {
           status: PaymentOrderStatusEnum.UNVERIFIED,
         })
@@ -150,6 +171,16 @@ export class WebhookService {
         })
         .orderBy('order.created_at', 'DESC')
         .getOne();
+
+      // 2) ยังไม่เคยผูก LINE → จับคู่ Order ผูก LINE (ยอด/เวลาตรงกัน) แล้วผูก Business
+      if (!order) {
+        order = await this.matchLineLinkOrder(
+          manager,
+          lookupKey,
+          lineUserId,
+          parsed.transferTime,
+        );
+      }
 
       const webhookLogsRepository = manager.getRepository(WebhookLog);
 
@@ -170,13 +201,18 @@ export class WebhookService {
 
       order.status = PaymentOrderStatusEnum.PAID;
       order.paid_at = new Date();
-      await manager.getRepository(PaymentOrder).save(order);
+      await ordersRepository.save(order);
 
-      // ครบเงื่อนไข "สร้าง QR + จ่ายเงินสำเร็จ" → หักโควต้า 1 ครั้ง
-      const quotaDeducted = await this.subscriptionsService.deductQuotaOnPaid(
-        order,
-        manager,
-      );
+      // QR ผูก LINE เป็นการยืนยันตัวตน ไม่หักโควต้า
+      let quotaDeducted = false;
+
+      if (!order.is_line_link) {
+        // ครบเงื่อนไข "สร้าง QR + จ่ายเงินสำเร็จ" → หักโควต้า 1 ครั้ง
+        quotaDeducted = await this.subscriptionsService.deductQuotaOnPaid(
+          order,
+          manager,
+        );
+      }
 
       if (order.api_key_id) {
         const usageLogsRepository = manager.getRepository(ApiKeyUsageLog);
@@ -207,10 +243,72 @@ export class WebhookService {
     });
   }
 
+  /**
+   * จับคู่ Order สำหรับผูก LINE (is_line_link = true) ด้วยยอด + เวลา
+   * แล้วผูก `businesses.line_user_id` และ `payment_orders.line_user_id` ให้ทันที
+   */
+  private async matchLineLinkOrder(
+    manager: EntityManager,
+    lookupKey: string,
+    lineUserId: string,
+    transferTime: Date,
+  ): Promise<PaymentOrder | null> {
+    const businessRepository = manager.getRepository(Business);
+
+    // LINE User ID หนึ่งบัญชีผูกได้กับธุรกิจเดียว
+    const alreadyLinked = await businessRepository.findOne({
+      where: { line_user_id: lineUserId },
+    });
+
+    if (alreadyLinked) {
+      return null;
+    }
+
+    const order = await manager
+      .getRepository(PaymentOrder)
+      .createQueryBuilder('order')
+      .setLock('pessimistic_write')
+      .where('order.lookup_key = :lookupKey', { lookupKey })
+      .andWhere('order.is_line_link = :isLineLink', { isLineLink: true })
+      .andWhere('order.line_user_id IS NULL')
+      .andWhere('order.status = :status', {
+        status: PaymentOrderStatusEnum.UNVERIFIED,
+      })
+      .andWhere('order.expires_at >= :transferTime', { transferTime })
+      .orderBy('order.created_at', 'DESC')
+      .getOne();
+
+    if (!order) {
+      return null;
+    }
+
+    const business = await businessRepository.findOne({
+      where: { id: order.business_id },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    if (!business || business.line_user_id) {
+      return null;
+    }
+
+    await businessRepository.update(
+      { id: business.id },
+      { line_user_id: lineUserId },
+    );
+
+    order.line_user_id = lineUserId;
+
+    return order;
+  }
+
   private async sendCallback(order: PaymentOrder): Promise<void> {
+    if (!order.redirect_url) {
+      return;
+    }
+
     const payload: CallbackPayload = {
       ok: true,
-      event: 'payment.paid',
+      event: order.is_line_link ? 'line.linked' : 'payment.paid',
       order_id: order.id,
       lookup_key: order.lookup_key,
       business_id: order.business_id,
@@ -219,6 +317,7 @@ export class WebhookService {
       total_amount: order.total_amount,
       status: order.status,
       paid_at: order.paid_at,
+      is_line_link: order.is_line_link,
     };
 
     try {

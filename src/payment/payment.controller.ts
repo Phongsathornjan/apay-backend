@@ -14,6 +14,7 @@ import { RoleGuard } from '../auth/guards/role.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuthUser } from '../auth/types/auth-user.type';
 import { RoleEnum } from '../enums';
+import { CreateLinkQrDto } from './dto/create-link-qr.dto';
 import { CreateQrDto } from './dto/create-qr.dto';
 import { PaymentService } from './payment.service';
 
@@ -32,6 +33,22 @@ export class PaymentController {
     @Body() dto: CreateQrDto,
   ) {
     return this.paymentService.createQrOrder(request.user, dto);
+  }
+
+  /**
+   * สร้าง QR ยืนยัน (ยอด 0.01 - 0.99) เพื่อผูก LINE User ID เข้ากับ Business
+   * ใช้ได้เฉพาะธุรกิจที่ยังไม่เคยผูก LINE เท่านั้น
+   *
+   * Body (optional): `{ redirect_url }` — เมื่อ QR นี้ถูกชำระ ระบบจะยิง
+   * HTTP POST (event `line.linked`) ไปที่ `redirect_url` ทันที
+   */
+  @Post('line/link-qr')
+  @Roles(RoleEnum.BUSINESS, RoleEnum.ADMIN)
+  createLineLinkQr(
+    @Req() request: Request & { user: AuthUser },
+    @Body() dto: CreateLinkQrDto,
+  ) {
+    return this.paymentService.createLineLinkOrder(request.user, dto);
   }
 
   @Get('orders/:id')
@@ -61,6 +78,8 @@ export class PaymentController {
       callback_sent: order.callback_sent,
       callback_status_code: order.callback_status_code,
       redirect_url: order.redirect_url,
+      line_user_id: order.line_user_id,
+      is_line_link: order.is_line_link,
       expires_at: order.expires_at,
       paid_at: order.paid_at,
       created_at: order.created_at,

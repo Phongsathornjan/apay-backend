@@ -23,6 +23,21 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 
 > **Jest & ESM note:** NestJS v12 packages (`@nestjs/common`, `@nestjs/testing`, ...) are ESM-only (`"type": "module"`). Jest needs Node's VM modules to `require()` them, so all `test*` scripts run Jest via `node --experimental-vm-modules node_modules/jest/bin/jest.js` (instead of the bare `jest` binary). Keep this flag when adding new test scripts, otherwise suites importing `@nestjs/testing` fail with `Must use import to load ES Module`.
 
+## Docker
+
+Production image lives at `Dockerfile` (multi-stage, `node:24-bookworm-slim` + `pnpm@11.24.0` matching the lockfile/pnpm major used locally):
+
+```bash
+docker build -t apay-backend .                       # deps -> build -> prune --prod -> runtime
+docker run --rm -p 3000:3000 --env-file .env apay-backend
+```
+
+- **Stages**: `base` (Node + pnpm) → `deps` (`pnpm install --frozen-lockfile`, includes devDeps + `python3/make/g++` for the `bcrypt` native build) → `build` (`pnpm build` then `pnpm prune --prod`) → `runtime` (copies only `dist/`, production `node_modules/`, `package.json`).
+- **`pnpm-workspace.yaml` must be copied in the deps stage**: it holds pnpm 11 `allowBuilds` (`bcrypt: true`), without it bcrypt's install script is skipped and the app crashes at runtime.
+- **Runtime**: runs as non-root `node`, `NODE_ENV=production`, `PORT=3000`, `CMD ["node","dist/main.js"]` (CommonJS build because `package.json` has no `"type": "module"`). `HEALTHCHECK` polls `GET /api/v1/app/health` with Node's built-in `fetch` (the slim image has no curl/wget).
+- **Config comes from env only** — `DATABASE_URL`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `VERIFY_LINE_SIGNATURE`, `LINE_CHANNEL_SECRET` must be passed at `docker run`/orchestrator level. Never bake `.env` into the image (`.dockerignore` excludes `.env*`). Do **not** set `ENV=development` in the image, otherwise TypeORM `synchronize` runs.
+- `.dockerignore` excludes `node_modules`, `dist`, tests/specs, docs, `migrations/` and secrets so the build context stays small.
+
 ## Testing Rules
 
 - **ทุกการ implement ต้องมี unit test**: ทุกครั้งที่สร้างไฟล์ใหม่หรือแก้ไข logic ใน `src/` ต้องเขียนหรืออัปเดต unit test ในไฟล์ `*.spec.ts` คู่กันในงานเดียวกัน (ไม่ใช่แยก PR/งานถัดไป) และต้องรัน `pnpm test` ผ่านก่อนส่งงาน
@@ -39,8 +54,17 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 - **Response & Error Envelope**:
   - Success responses are automatically wrapped by global `ResponseInterceptor` into `{ ok: true, status, correlation_id, data }`. Return raw data from controllers—do not manually wrap with `{ ok, data }`.
   - `HttpException` errors are formatted by global `HttpErrorFilter` into `{ ok: false, status, correlation_id, message }`.
-  - Every request gets `req.correlation_id` via `correlationIdMiddleware` (from `x-correlation-id` header or generated UUID), and `LoggerInterceptor` logs masked request/response bodies via `src/utils/maskBody.ts`.
+  - Every request gets `req.correlation_id` via `correlationIdMiddleware` (from `x-correlation-id` header or generated UUID), and `LoggerInterceptor` logs masked request/response **headers and bodies**:
+    - Request log (`ReqInterceptor`) is written immediately with `req_headers` (masked by `src/utils/maskHeaders.ts`), `req_body` (masked by `src/utils/maskBody.ts`), and `time_diff_ms` (≈0, since it measures up to the interceptor entry). It has no `statusCode`.
+    - Response log (`ResInterceptor`) is written once on `finish` (or `close` for aborted connections — a `logged` guard prevents double logging) with final `statusCode`, `res_headers`, `res_body`, `time_diff_ms` (real duration), and `error` (`{ name, message }`, `null` on success).
+    - `res_body` is never `null` for failures: on `catchError` the interceptor rebuilds the error envelope (`{ ok: false, status, correlation_id, message }`) from the `HttpException` (array validation messages preserved); non-`HttpException` errors log `{ ok: false, status: 500, correlation_id, message: 'Internal server error' }`.
+    - `maskHeaders` masks sensitive header values (`Authorization`, `Cookie`, `Set-Cookie`, `x-api-key`, `X-Refresh-Token`, `x-line-signature`, ...) case-insensitively as `<first 8>***<last 4>` (`***` for short values), then passes the remaining values through `maskBody` so PII in custom headers is masked too.
 - **Raw Body Requirement**: `NestFactory.create(AppModule, { rawBody: true })` is required so `request.rawBody` is available for LINE webhook HMAC-SHA256 signature verification.
+- **CORS (`src/common/config/cors.config.ts`)**: `main.ts` calls `app.enableCors(buildCorsOptions())` **before** the correlation-id middleware so browser clients (frontend `http://localhost:3001`) can call the API and preflight `OPTIONS` requests succeed.
+  - Allowed origins come from `CORS_ORIGINS` (comma-separated, trailing slashes stripped). When unset/blank it falls back to `DEFAULT_CORS_ORIGINS`: `http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:3001`, `http://127.0.0.1:3001`, `http://localhost:5173`, `http://127.0.0.1:5173`.
+  - `CORS_ORIGINS=*` or `CORS_ALLOW_ALL=true` reflects any origin, but then `credentials` is forced to `false` (browsers reject `*` + credentials).
+  - Requests without an `Origin` header (curl, server-to-server, LINE webhook, payment callback) are always allowed.
+  - `allowedHeaders`: `Accept`, `Authorization`, `Content-Type`, `Origin`, `X-Requested-With`, `x-api-key`, `x-correlation-id`; `exposedHeaders`: `x-correlation-id`, `Content-Length`; `maxAge` is 24h. Add any new custom request header to `CORS_ALLOWED_HEADERS` or browsers will block it.
 - **Central Enums (`src/enums/`)**: ทุกค่า enum ของระบบ (role + คอลัมน์ที่เป็น enum ใน DB) ถูกประกาศที่ `src/enums/*.enum.ts` และ re-export ผ่าน barrel `src/enums/index.ts`:
   - `role.enum.ts` → `RoleEnum` (`ADMIN = 'admin'`, `BUSINESS = 'business'`) + type `UserRole` (ใช้ใน `AuthUser`, JWT payload, `@Roles(...)`)
   - `business-subscription-status.enum.ts` → `BusinessSubscriptionStatusEnum` + type `BusinessSubscriptionStatus`
@@ -63,8 +87,10 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
   - On bootstrap, `DatabaseSeederService` seeds default roles (`admin`, `business`), default master packages (`FREE`, `STARTER`, `PRO` — idempotent by `code`) and upserts the admin user if `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
 - **Tables in `TABLES` (`src/database/database-security.service.ts`)**: `roles`, `users`, `businesses`, `packages`, `business_subscriptions`, `subscription_periods`, `api_keys`, `api_key_usage_logs`, `payment_orders`, `webhook_logs`.
 - **Schema Notes**:
+  - `businesses.line_user_id` (`varchar(64)`, nullable, **unique**) is the LINE User ID bound to the business. It is `null` until the business completes the LINE linking flow, and a business **cannot create a payment QR** while it is `null`. One LINE User ID can only be bound to one business (unique index `idx_businesses_line_user_id`).
   - `businesses.api_key_prefix` / `businesses.api_key_hash` are **nullable legacy columns**; new API keys live in `api_keys` (multiple keys per business).
   - `payment_orders.api_key_id` is nullable and references `api_keys` with `onDelete: 'SET NULL'`.
+  - `payment_orders.line_user_id` (nullable) stores the LINE User ID used for matching; `payment_orders.is_line_link` (`false` by default) marks a LINE-linking verification order. Link orders accept an optional `redirect_url` (used only for the `line.linked` callback) and are indexed by `idx_payment_orders_line_lookup`.
   - `packages` and `business_subscriptions` use `@DeleteDateColumn` (`deleted_at`) for soft delete. `api_key_usage_logs` keeps history even after an API key is soft-deleted.
 
 ## Core Business Logic
@@ -72,8 +98,8 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 ### 1. Auth & API Keys (`src/auth/`, `src/users/`, `src/business/`)
 - **Roles**: `admin` and `business`. Protected routes use `@UseGuards(JwtAuthGuard, RoleGuard)` and `@Roles(...)`. `RoleGuard` verifies the user exists, is active (`user.is_active`), has a valid role in `requiredRoles`, and syncs `request.user.role` from the database.
 - **Endpoints (`/api/v1/auth`)**:
-  - `POST /login`: Authenticates `admin` or `business` user with username/password; verifies business `is_active` for `business` role.
-  - `POST /register-business` (`admin` only): Creates a `User` (`role = business`), a `Business`, and (optionally) the initial Master Package assignment — **all inside one TypeORM `DataSource.transaction`** (`manager` is passed to `SubscriptionsService.assignOrChangePackage`), so any failure (duplicate username, missing role, invalid/inactive `package_id`) rolls back everything. No API key is created at registration. Returns `{ user_id, username, role, business_id, business_name, promptpay_id }`.
+  - `POST /login`: Authenticates `admin` or `business` user with username/password; verifies business `is_active` for `business` role. For `business` users the response `user` object also returns `line_user_id` (`null` when not linked yet) so the frontend knows whether to start the LINE linking flow.
+  - `POST /register-business` (`admin` only): Creates a `User` (`role = business`), a `Business`, and (optionally) the initial Master Package assignment — **all inside one TypeORM `DataSource.transaction`** (`manager` is passed to `SubscriptionsService.assignOrChangePackage`), so any failure (duplicate username, missing role, invalid/inactive `package_id`) rolls back everything. No API key is created at registration. Accepts optional `line_destination` and `line_user_id`. Returns `{ user_id, username, role, business_id, business_name, promptpay_id, line_user_id }`.
   - `POST /token`: Exchanges a business API key (from body `api_key` or `x-api-key` header) for an access/refresh JWT bundle. Looks up `api_keys` by `key_prefix` with `is_active = true` and not soft-deleted, verifies `business.is_active` and `user.is_active`, then compares `sha256(apiKey)` via timing-safe `safeCompare` against `api_keys.key_hash`.
   - `POST /refresh`: Rotates access & refresh tokens. If the refresh token payload has `api_key_id`, the key must still be active/not deleted and `api_keys.refresh_token_hash` must match (rotated on every refresh). Otherwise falls back to `users.refresh_token_hash` / `businesses.refresh_token_hash`.
 - **JWT Payload**: `sub`, `username`, `role`, `business_id`, `api_key_id` (`null` for username/password logins), `type` (`'access'` or `'refresh'`). `JwtStrategy` rejects payloads without `sub` or with `type !== 'access'`, and maps `api_key_id` to `req.user.apiKeyId`.
@@ -114,11 +140,16 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 
 ### 5. Payment Orders & PromptPay QR (`src/payment/`)
 - **Endpoints (`/api/v1/payments`)**:
-  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. Requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). If the JWT contains `api_key_id`, the key must still be active/not deleted and belong to the business, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
-  - `GET /orders/:id` (`business`, `admin`): Returns order details (`business` users must have a valid `businessId` matching `order.business_id`, otherwise `404`).
+  - `POST /line/link-qr` (`business`, `admin`): Creates a LINE-linking verification order (`is_line_link = true`) with a total amount between **0.01 and 0.99** (`base_amount = 0`, `decimal_ref` allocated from `0.01`–`0.99`). It does **not** check quota/rate limit, does **not** write usage logs, and does not attach an `api_key_id`. **Optional body** `{ redirect_url }` (`CreateLinkQrDto`, `@IsUrl({ require_tld: false })`, max 2048): when the QR is paid the backend POSTs a `line.linked` callback to it (5s timeout, records `callback_sent` / `callback_status_code`); without it there is no callback. Throws `409 Conflict` when the business already has `line_user_id`.
+  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. **Requires `businesses.line_user_id` to be set** (otherwise `403 ForbiddenException('Business is not linked to a LINE user yet; ...')`), and stores it on `payment_orders.line_user_id` (`is_line_link = false`). Also requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). If the JWT contains `api_key_id`, the key must still be active/not deleted and belong to the business, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
+  - `GET /orders/:id` (`business`, `admin`): Returns order details including `line_user_id` and `is_line_link` (`business` users must have a valid `businessId` matching `order.business_id`, otherwise `404`).
+- **LINE Linking Flow**:
+  - An unlinked business calls `POST /line/link-qr` and pays the generated QR (0.01–0.99) with the KBank account whose LINE notifications are forwarded to APay. Passing `redirect_url` in the body makes the backend POST a `line.linked` callback (5s timeout) after the binding succeeds — the backoffice uses it to relay the result to the browser over SSE; polling remains the fallback.
+  - When the KBank webhook arrives with a matching amount + time (`lookup_key`) and `source.userId` (required), the system binds `businesses.line_user_id = source.userId` and `payment_orders.line_user_id` to that order. If the LINE User ID is already bound to another business (or the business is already linked), the webhook is logged as `NO_MATCH` and no binding happens.
+  - Verification orders are marked `PAID` but **skip quota deduction** and the `QR_PAID` usage log (they are identity verification, not revenue).
 - **Order Allocation Logic (`PaymentService`)**:
   - Lazily marks any `UNVERIFIED` orders with `expires_at <= now` as `EXPIRED` before allocating.
-  - Floors input `amount` (`>= 1`) to integer `base_amount` and allocates the lowest unused `decimal_ref` from `0.01` to `0.99` (`MAX_DECIMAL_REF = 99`) among active `UNVERIFIED` orders with the same `base_amount`. Throws `409 Conflict` if all 99 slots are occupied.
+  - Floors input `amount` (`>= 1`) to integer `base_amount` and allocates the lowest unused `decimal_ref` from `0.01` to `0.99` (`MAX_DECIMAL_REF = 99`) among active `UNVERIFIED` orders with the same `base_amount`. Throws `409 Conflict` if all 99 slots are occupied. LINE-linking orders use `base_amount = 0`, so their 0.01–0.99 slots never collide with normal orders.
   - `total_amount = base_amount + decimal_ref`. QR TTL is **5 minutes** (`QR_TTL_MS`).
   - Uses `Asia/Bangkok` (`UTC+7`, `src/common/utils/datetime.util.ts`) to construct:
     - `order.id`: `YYYYMMDDHHmmss_<total_amount.toFixed(2)>`
@@ -129,15 +160,17 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 - **Endpoint**: `POST /api/v1/webhooks/kbank/line`
 - **Signature Verification**: Checks `x-line-signature` (HMAC-SHA256 of `request.rawBody` with `LINE_CHANNEL_SECRET`) only when `VERIFY_LINE_SIGNATURE=true`.
 - **Idempotency**: Ignores non-text events and deduplicates by checking `webhook_logs.line_message_id`.
+- **LINE User ID is required**: Each event's `source.userId` (`lineUserId`) is mandatory for processing. An event without `source.userId` is logged as `NO_MATCH` and is never matched against an order.
 - **KBank Text Parser (`src/webhook/utils/kbank-message.parser.ts`)**:
   - Extracts 2-decimal transfer amount from Thai KBank LINE notifications (keywords: `จำนวนเงิน`, `จำนวน`, `เงินเข้า`, `รับโอนเงิน`, `รับโอน`, `รับเงิน`, `โอนเข้า`).
   - Parses `DD/MM/YY(YY)` and `HH:mm` in `Asia/Bangkok` time, converting 2-digit or 4-digit Thai Buddhist Era (พ.ศ.) years to CE (`convertBuddhistYearToCE`), falling back to the LINE event timestamp if no date is in the text.
 - **Order Matching, Quota Deduction & Callback (`WebhookService`)**:
-  - Builds `lookupKey = "${parsed.dateStr}_${parsed.amount}"` and queries `payment_orders` inside a transaction with `pessimistic_write` lock where `lookup_key = :lookupKey`, `status = 'UNVERIFIED'`, and `expires_at >= :transferTime` (ordered by `created_at DESC`).
+  - Builds `lookupKey = "${parsed.dateStr}_${parsed.amount}"` and, inside a transaction with `pessimistic_write` lock, first queries `payment_orders` where `lookup_key = :lookupKey` **AND `line_user_id = :lineUserId`** (the LINE User ID from the event), `status = 'UNVERIFIED'`, and `expires_at >= :transferTime` (ordered by `created_at DESC`).
+  - If no normal order matches, it tries the **LINE linking** match: a `payment_orders` row with `is_line_link = true`, `line_user_id IS NULL`, matching `lookup_key`/time, and whose `businesses.line_user_id IS NULL`. On match it sets `businesses.line_user_id = lineUserId` and `payment_orders.line_user_id = lineUserId`. If that LINE User ID is already linked to another business, the match is rejected (unique index protects races).
   - Logs result in `webhook_logs` with `process_status` (`MATCHED` or `NO_MATCH`).
-  - On match, marks order `PAID` (`paid_at = now`) and calls `subscriptions.deductQuotaOnPaid()` in the same transaction (quota is deducted only when **QR created + payment succeeded** and the subscription is still `ACTIVE` with remaining quota).
+  - On a normal match, marks order `PAID` (`paid_at = now`) and calls `subscriptions.deductQuotaOnPaid()` in the same transaction (quota is deducted only when **QR created + payment succeeded** and the subscription is still `ACTIVE` with remaining quota). LINE-linking orders are marked `PAID` without deducting quota.
   - If `order.api_key_id` is set, writes `api_key_usage_logs` (`action = 'QR_PAID'`, `quota_deducted` = result of the deduction). Orders created without an API key still deduct quota but skip the log.
-  - Sends an HTTP `POST` callback (`event: 'payment.paid'`, 5s timeout) to `order.redirect_url`, recording `callback_sent` and `callback_status_code` on the order.
+  - Sends an HTTP `POST` callback (5s timeout) to `order.redirect_url` (when present), recording `callback_sent` and `callback_status_code` on the order. `event` is `payment.paid` for normal orders and `line.linked` for `is_line_link = true` orders; the payload also carries `is_line_link` so receivers can branch.
 
 ### 7. Dashboard Analytics (`src/dashboard/`)
 - **Read-only Analytics APIs** for Frontend KPI cards and charts (`Asia/Bangkok` / `UTC+7` timezone). Guarded by `@UseGuards(JwtAuthGuard, RoleGuard)`. Any module using `RoleGuard` (`PackagesModule`, `SubscriptionsModule`, `ApiKeysModule`, `PaymentModule`, `DashboardModule`) imports `UsersModule` so `RoleGuard` can resolve `UsersService` without circular dependencies.
@@ -173,3 +206,5 @@ pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 - `JWT_SECRET` / `JWT_REFRESH_SECRET`: Secrets for access and refresh tokens (`JWT_EXPIRES_IN` defaults to `15m`, `JWT_REFRESH_EXPIRES_IN` defaults to `7d`).
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD`: Used by `DatabaseSeederService` to seed the initial `admin` user.
 - `VERIFY_LINE_SIGNATURE`: Set to `'true'` to enforce `x-line-signature` verification using `LINE_CHANNEL_SECRET`.
+- `CORS_ORIGINS`: Comma-separated list of browser origins allowed to call the API (e.g. `http://localhost:3001,https://app.apay.com`). Defaults to the local dev origins. `*` allows any origin (forces `credentials: false`).
+- `CORS_ALLOW_ALL`: Set to `'true'` as an alternative to `CORS_ORIGINS=*`.

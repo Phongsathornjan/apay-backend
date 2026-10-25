@@ -266,8 +266,9 @@
           "2. **Admin** ผูก Master Package ให้ร้านค้าผ่าน `POST /api/v1/subscriptions` (เริ่มรอบบิล Prepaid + รีเซ็ตโควต้า)",
           "3. **Admin หรือ Business** สร้าง API Key ผ่าน `POST /api/v1/api-keys` (ได้ Raw Key `apay_live_<8_hex>_<32_hex>` เพียงครั้งเดียว และจำกัดจำนวนตาม `max_api_keys`)",
           "4. **Business / Merchant** นำ `api_key` มาแลกเป็น JWT (`access_token`, `refresh_token`) ที่ `POST /api/v1/auth/token` (Token จะแนบ `api_key_id`) หรือเข้าสู่ระบบด้วย username/password",
-          "5. **สร้างรายการชำระเงิน PromptPay QR** ที่ `POST /api/v1/payments/qr` ระบบตรวจโควต้า/Rate Limit, จองทศนิยมอ้างอิง (`0.01` - `0.99`) ให้อัตโนมัติ มีอายุ **5 นาที** และบันทึก `QR_CREATED`",
-          "6. เมื่อลูกค้าโอนเงินและ LINE KBank แจ้งเตือนมายัง `POST /api/v1/webhooks/kbank/line` ระบบจะจับคู่ยอด (`lookup_key = YYYYMMDD_<total_amount>`) เปลี่ยนสถานะเป็น `PAID`, หักโควต้า 1 ครั้ง, บันทึก `QR_PAID` และยิง Webhook Callback (`event: 'payment.paid'`) ไปยัง `redirect_url` ของออเดอร์นั้นทันที"
+          "5. **ผูก LINE User ID (ครั้งแรกเท่านั้น)**: เรียก `POST /api/v1/payments/line/link-qr` เพื่อสร้าง QR ยืนยันยอด `0.01` - `0.99` แล้วชำระด้วยบัญชีธนาคารที่ LINE KBank แจ้งเตือนเข้า APay — Webhook จะผูก `businesses.line_user_id` ให้อัตโนมัติ (ธุรกิจที่ยังไม่ผูก LINE จะสร้าง QR รับเงินไม่ได้)",
+          "6. **สร้างรายการชำระเงิน PromptPay QR** ที่ `POST /api/v1/payments/qr` ระบบตรวจโควต้า/Rate Limit, จองทศนิยมอ้างอิง (`0.01` - `0.99`) ให้อัตโนมัติ มีอายุ **5 นาที**, บันทึก `line_user_id` และ `QR_CREATED`",
+          "7. เมื่อลูกค้าโอนเงินและ LINE KBank แจ้งเตือนมายัง `POST /api/v1/webhooks/kbank/line` ระบบจะจับคู่ยอด (`lookup_key = YYYYMMDD_<total_amount>`) **ร่วมกับ `source.userId` (`line_user_id`)** เปลี่ยนสถานะเป็น `PAID`, หักโควต้า 1 ครั้ง, บันทึก `QR_PAID` และยิง Webhook Callback (`event: 'payment.paid'`) ไปยัง `redirect_url` ของออเดอร์นั้นทันที"
         ].join("\n")
       },
       servers: [
@@ -287,7 +288,7 @@
         },
         {
           name: "Payments",
-          description: "สร้าง PromptPay QR Payment Order และตรวจสอบสถานะคำสั่งซื้อ"
+          description: "สร้าง PromptPay QR Payment Order, ผูก LINE User ID และตรวจสอบสถานะคำสั่งซื้อ"
         },
         {
           name: "Packages",
@@ -401,7 +402,7 @@
           },
           AuthUserSummary: {
             type: "object",
-            required: ["user_id", "username", "role", "business_id"],
+            required: ["user_id", "username", "role", "business_id", "line_user_id"],
             properties: {
               user_id: {
                 type: "string",
@@ -423,6 +424,12 @@
                 nullable: true,
                 example: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
                 description: "มีค่าเมื่อ role เป็น `business` และเป็น `null` เมื่อ role เป็น `admin`"
+              },
+              line_user_id: {
+                type: "string",
+                nullable: true,
+                example: "Uabcdef1234567890abcdef1234567890",
+                description: "LINE User ID ที่ผูกกับธุรกิจ (`null` เมื่อยังไม่ผูก — ต้องผูกก่อนจึงจะสร้าง QR รับเงินได้)"
               }
             }
           },
@@ -499,6 +506,13 @@
                 example: "U1234567890abcdef1234567890abcdef",
                 description: "(Optional) LINE Bot Destination User ID"
               },
+              line_user_id: {
+                type: "string",
+                maxLength: 64,
+                nullable: true,
+                example: "Uabcdef1234567890abcdef1234567890",
+                description: "(Optional) LINE User ID ของเจ้าของธุรกิจ — หากไม่ระบุ จะต้องผูกภายหลังผ่าน `POST /api/v1/payments/line/link-qr` ก่อนสร้าง QR รับเงิน"
+              },
               package_id: {
                 type: "string",
                 format: "uuid",
@@ -516,7 +530,8 @@
               "role",
               "business_id",
               "business_name",
-              "promptpay_id"
+              "promptpay_id",
+              "line_user_id"
             ],
             properties: {
               user_id: {
@@ -545,6 +560,12 @@
               promptpay_id: {
                 type: "string",
                 example: "0812345678"
+              },
+              line_user_id: {
+                type: "string",
+                nullable: true,
+                example: "Uabcdef1234567890abcdef1234567890",
+                description: "LINE User ID ที่ผูกกับธุรกิจ (`null` เมื่อยังไม่ผูก)"
               }
             }
           },
@@ -587,6 +608,21 @@
               }
             }
           },
+          CreateLinkQrRequest: {
+            type: "object",
+            description: "Body เป็น optional ทั้งหมด — ไม่ส่งมาก็ได้ (ระบบจะไม่ยิง callback)",
+            properties: {
+              redirect_url: {
+                type: "string",
+                format: "uri",
+                maxLength: 2048,
+                nullable: true,
+                example: "https://app.apay.com/api/line-link/callback",
+                description:
+                  "URL ปลายทางสำหรับรับ HTTP POST Callback (`event: 'line.linked'`) เมื่อ QR ผูก LINE ถูกชำระและผูก LINE สำเร็จ (Timeout 5 วินาที)"
+              }
+            }
+          },
           CreateQrData: {
             type: "object",
             required: [
@@ -600,7 +636,9 @@
               "status",
               "redirect_url",
               "expires_at",
-              "api_key_id"
+              "api_key_id",
+              "line_user_id",
+              "is_line_link"
             ],
             properties: {
               order_id: {
@@ -659,6 +697,107 @@
                 nullable: true,
                 example: "d4e5f6a7-b8c9-0123-def0-234567890123",
                 description: "API Key ที่ใช้สร้างคำสั่งซื้อ (`null` เมื่อสร้างด้วย JWT จาก username/password)"
+              },
+              line_user_id: {
+                type: "string",
+                nullable: true,
+                example: "Uabcdef1234567890abcdef1234567890",
+                description: "LINE User ID ที่ใช้จับคู่ Webhook (`null` สำหรับ QR ผูก LINE)"
+              },
+              is_line_link: {
+                type: "boolean",
+                example: false,
+                description: "`true` = QR ยืนยันสำหรับผูก LINE (ยอด 0.01 - 0.99)"
+              }
+            }
+          },
+          LinkLineQrData: {
+            type: "object",
+            description: "QR ยืนยันสำหรับผูก LINE User ID เข้ากับ Business (ยอด 0.01 - 0.99) — มี callback `line.linked` เมื่อส่ง `redirect_url` ตอนสร้าง",
+            required: [
+              "order_id",
+              "lookup_key",
+              "base_amount",
+              "decimal_ref",
+              "total_amount",
+              "qr_payload",
+              "qr_image",
+              "status",
+              "redirect_url",
+              "expires_at",
+              "api_key_id",
+              "line_user_id",
+              "is_line_link"
+            ],
+            properties: {
+              order_id: {
+                type: "string",
+                example: "20261023153045_0.01",
+                description: "รหัสคำสั่งซื้อ รูปแบบ `YYYYMMDDHHmmss_<total_amount>`"
+              },
+              lookup_key: {
+                type: "string",
+                example: "20261023_0.01",
+                description: "คีย์จับคู่ยอดโอน `YYYYMMDD_<total_amount>`"
+              },
+              base_amount: {
+                type: "number",
+                enum: [0],
+                example: 0
+              },
+              decimal_ref: {
+                type: "number",
+                example: 0.01,
+                description: "เศษสตางค์ที่ระบบจองให้ (0.01 ถึง 0.99)"
+              },
+              total_amount: {
+                type: "number",
+                example: 0.01,
+                description: "ยอดที่ต้องชำระเพื่อยืนยัน (0.01 - 0.99)"
+              },
+              qr_payload: {
+                type: "string",
+                example: "00020101021229370016A000000677010111011300668123456785802TH530376454040.016304ABCD"
+              },
+              qr_image: {
+                type: "string",
+                example: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+                description: "รูปภาพ QR Code (Base64 Data URL)"
+              },
+              status: {
+                type: "string",
+                enum: ["UNVERIFIED", "PAID", "EXPIRED"],
+                example: "UNVERIFIED"
+              },
+              redirect_url: {
+                type: "string",
+                nullable: true,
+                example: "https://app.apay.com/api/line-link/callback",
+                description:
+                  "`redirect_url` ที่ใช้รับ callback (`line.linked`) — เป็น `null` เมื่อไม่ได้ส่งมาตอนสร้าง QR"
+              },
+              expires_at: {
+                type: "string",
+                format: "date-time",
+                example: "2026-10-23T08:35:45.000Z",
+                description: "วันเวลาหมดอายุของ QR (5 นาที)"
+              },
+              api_key_id: {
+                type: "string",
+                format: "uuid",
+                nullable: true,
+                example: null
+              },
+              line_user_id: {
+                type: "string",
+                nullable: true,
+                example: null,
+                description: "`null` จนกว่า Webhook ที่ตรงกับยอด/เวลาจะผูก LINE User ID ให้"
+              },
+              is_line_link: {
+                type: "boolean",
+                enum: [true],
+                example: true
               }
             }
           },
@@ -676,6 +815,8 @@
               "callback_sent",
               "callback_status_code",
               "redirect_url",
+              "line_user_id",
+              "is_line_link",
               "expires_at",
               "paid_at",
               "created_at"
@@ -727,7 +868,20 @@
               redirect_url: {
                 type: "string",
                 format: "uri",
-                example: "https://merchant.example.com/webhooks/apay"
+                nullable: true,
+                example: "https://merchant.example.com/webhooks/apay",
+                description: "`null` สำหรับ QR ผูก LINE"
+              },
+              line_user_id: {
+                type: "string",
+                nullable: true,
+                example: "Uabcdef1234567890abcdef1234567890",
+                description: "LINE User ID ที่บันทึกบน Order (ใช้จับคู่ Webhook ร่วมกับ `lookup_key`)"
+              },
+              is_line_link: {
+                type: "boolean",
+                example: false,
+                description: "`true` = QR ยืนยันสำหรับผูก LINE"
               },
               expires_at: {
                 type: "string",
@@ -770,6 +924,8 @@
                     },
                     source: {
                       type: "object",
+                      description: "ต้นทางของ Event — ต้องมี `userId` เพื่อใช้จับคู่/ผูก Business",
+                      required: ["userId"],
                       properties: {
                         type: {
                           type: "string",
@@ -777,7 +933,8 @@
                         },
                         userId: {
                           type: "string",
-                          example: "Uabcdef1234567890abcdef1234567890"
+                          example: "Uabcdef1234567890abcdef1234567890",
+                          description: "LINE User ID (บังคับ) ใช้เป็น `line_user_id` ในการจับคู่ Order และผูก Business"
                         }
                       }
                     },
@@ -819,7 +976,8 @@
           },
           MerchantCallbackPayload: {
             type: "object",
-            description: "Payload ที่ระบบ APay ยิง HTTP POST ไปยัง `redirect_url` ของร้านค้าเมื่อจับคู่ยอดโอนสำเร็จ (Timeout 5 วินาที)",
+            description:
+              "Payload ที่ระบบ APay ยิง HTTP POST ไปยัง `redirect_url` เมื่อจับคู่ยอดโอนสำเร็จ (Timeout 5 วินาที) — `event = payment.paid` สำหรับ QR รับเงินปกติ และ `event = line.linked` สำหรับ QR ยืนยันการผูก LINE",
             required: [
               "ok",
               "event",
@@ -830,7 +988,8 @@
               "decimal_ref",
               "total_amount",
               "status",
-              "paid_at"
+              "paid_at",
+              "is_line_link"
             ],
             properties: {
               ok: {
@@ -839,8 +998,13 @@
               },
               event: {
                 type: "string",
-                enum: ["payment.paid"],
+                enum: ["payment.paid", "line.linked"],
                 example: "payment.paid"
+              },
+              is_line_link: {
+                type: "boolean",
+                description: "`true` = QR ยืนยันการผูก LINE (ยอด 0.01–0.99, ไม่หักโควต้า)",
+                example: false
               },
               order_id: {
                 type: "string",
@@ -2460,6 +2624,111 @@
             }
           }
         },
+        "/api/v1/payments/line/link-qr": {
+          post: {
+            tags: ["Payments"],
+            summary: "สร้าง QR ยืนยันเพื่อผูก LINE User ID เข้ากับ Business",
+            description: [
+              "สร้างรายการ `payment_orders` ประเภทผูก LINE (`is_line_link = true`) ด้วยยอด **0.01 - 0.99 บาท** (`base_amount = 0`, `decimal_ref` จองจาก 0.01–0.99) สำหรับธุรกิจที่ยังไม่มี `line_user_id`",
+              "",
+              "**ขั้นตอนการผูก:**",
+              "- เรียก Endpoint นี้ (Role `business` หรือ `admin`) แล้วนำ QR ไปชำระด้วยบัญชีธนาคารที่ LINE KBank แจ้งเตือนเข้า APay",
+              "- เมื่อ LINE Webhook เงินเข้ามาที่มียอด + เวลาตรงกับ `lookup_key` ของ Order นี้ ระบบจะผูก `businesses.line_user_id` เป็น `source.userId` ของ Event และบันทึก `payment_orders.line_user_id` ให้อัตโนมัติ",
+              "- QR มีอายุ **5 นาที** และ **ไม่คิดโควต้า / ไม่หักโควต้า** (เป็นการยืนยันตัวตน ไม่ใช่รายได้)",
+              "- Body เป็น **optional**: ส่ง `redirect_url` เพื่อรับ Callback (`event: 'line.linked'`) ทันทีที่ผูกสำเร็จ — ถ้าไม่ส่ง จะไม่มี callback และ client ต้อง polling เอง",
+              "- หากธุรกิจผูก LINE แล้ว จะตอบ `409 Conflict` (ไม่สามารถสร้าง QR ผูกซ้ำได้)"
+            ].join("\n"),
+            security: [{ BearerAuth: [] }],
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: false,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/CreateLinkQrRequest" }
+                }
+              }
+            },
+            callbacks: {
+              onLineLinked: {
+                "{$request.body#/redirect_url}": {
+                  post: {
+                    summary: "Callback แจ้งผลการผูก LINE สำเร็จ (line.linked)",
+                    description:
+                      "เมื่อ QR ยืนยัน (0.01–0.99) ถูกชำระและระบบผูก `businesses.line_user_id` สำเร็จ จะส่ง HTTP POST มายัง `redirect_url` ที่ระบุตอนสร้าง QR (Timeout 5 วินาที) — ไม่หักโควต้าและไม่มี `payment.paid`",
+                    requestBody: {
+                      required: true,
+                      content: {
+                        "application/json": {
+                          schema: { $ref: "#/components/schemas/MerchantCallbackPayload" }
+                        }
+                      }
+                    },
+                    responses: {
+                      "200": {
+                        description: "ปลายทางตอบ 2xx ระบบจะบันทึก `callback_sent = true` และ `callback_status_code`"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            responses: {
+              "201": {
+                description: "สร้าง QR ยืนยันสำหรับผูก LINE สำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 201 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/LinkLineQrData" }
+                      }
+                    }
+                  }
+                }
+              },
+              "401": {
+                description: "ไม่ได้ยืนยันตัวตน หรือไม่พบบัญชีธุรกิจที่เปิดใช้งาน",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "403": {
+                description: "API Key ที่ใช้ใน Token ถูกปิดใช้งาน หรือ Role ไม่ถูกต้อง",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "409": {
+                description: "ธุรกิจผูก LINE User ID ไว้แล้ว",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 409,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Business is already linked to a LINE user"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "/api/v1/payments/qr": {
           post: {
             tags: ["Payments"],
@@ -2468,11 +2737,13 @@
               "สร้างคำสั่งซื้อและสร้าง PromptPay QR Code สำหรับร้านค้าของ Token ที่เรียกใช้งาน (รองรับ Role `business` และ `admin` ที่ผูกกับธุรกิจ)",
               "",
               "**รายละเอียดการทำงาน:**",
+              "- ต้องผูก LINE User ID ก่อน (`businesses.line_user_id` ต้องมีค่า) มิฉะนั้นจะถูกปฏิเสธ `403` — ผูกได้ที่ `POST /api/v1/payments/line/link-qr`",
               "- ต้องมี Subscription สถานะ `ACTIVE` และยังไม่เลย `current_period_end` (paid-through) มิฉะนั้นจะถูกปฏิเสธ `403`",
               "- ตรวจสอบ `quota_remaining > 0` และ Rate Limit ต่อชั่วโมงของ Business (นับจาก `api_key_usage_logs.action = 'QR_CREATED'` ใน 60 นาทีล่าสุด) — เกินจะถูกปฏิเสธ `429`",
               "- ปรับสถานะออเดอร์ `UNVERIFIED` ที่หมดอายุแล้ว (`expires_at <= now`) ให้เป็น `EXPIRED` โดยอัตโนมัติ",
               "- ปัดเศษ `amount` ลงเป็นจำนวนเต็ม (`base_amount`) และจองค่า `decimal_ref` ที่ว่างอยู่ตั้งแต่ `0.01` ถึง `0.99`",
               "- คำนวณ `total_amount = base_amount + decimal_ref` และสร้าง PromptPay EMVCo Payload พร้อมรูป Base64 PNG Data URL (`qr_image`)",
+              "- บันทึก `payment_orders.line_user_id` = `businesses.line_user_id` และ `is_line_link = false` เพื่อใช้จับคู่ Webhook ร่วมกับ `lookup_key`",
               "- กำหนดเวลาหมดอายุ `expires_at` = 5 นาทีนับจากเวลาที่สร้าง",
               "- หาก Token มี `api_key_id` จะผูก `payment_orders.api_key_id` และบันทึก Usage Log `QR_CREATED` (ยังไม่หักโควต้า)"
             ].join("\n"),
@@ -2550,7 +2821,7 @@
                 }
               },
               "403": {
-                description: "Subscription ไม่ได้อยู่ในสถานะ ACTIVE (PAST_DUE / ไม่มีแพ็กเกจ / ถูกยกเลิก) หรือ API Key ถูกปิดใช้งาน",
+                description: "ธุรกิจยังไม่ผูก LINE User ID (`businesses.line_user_id` เป็น null), Subscription ไม่ได้อยู่ในสถานะ ACTIVE (PAST_DUE / ไม่มีแพ็กเกจ / ถูกยกเลิก) หรือ API Key ถูกปิดใช้งาน",
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" },
@@ -2558,7 +2829,7 @@
                       ok: false,
                       status: 403,
                       correlation_id: "550e8400-e29b-41d4-a716-446655440000",
-                      message: "Business package is inactive or unpaid"
+                      message: "Business is not linked to a LINE user yet; please link LINE before creating a QR"
                     }
                   }
                 }
@@ -3401,8 +3672,13 @@
               "**การตรวจสอบความปลอดภัยและ Idempotency:**",
               "- หากตั้งค่า `VERIFY_LINE_SIGNATURE=true` ระบบจะตรวจสอบ Header `x-line-signature` ด้วย HMAC-SHA256 (`LINE_CHANNEL_SECRET`) กับ `rawBody`",
               "- ป้องกันข้อความซ้ำด้วย `webhook_logs.line_message_id`",
+              "- **ต้องมี `source.userId` (LINE User ID) ในทุก Event** มิฉะนั้นจะบันทึกเป็น `NO_MATCH` และไม่จับคู่ Order ใด ๆ",
               "- สกัดยอดเงินทศนิยม 2 ตำแหน่งและวันเวลาโอน (แปลงปี พ.ศ. เป็น ค.ศ. อัตโนมัติ) เพื่อค้นหา `lookup_key = YYYYMMDD_<amount>` ที่ยังไม่หมดอายุ (`expires_at >= transferTime`)",
-              "- เมื่อจับคู่สำเร็จจะเปลี่ยนสถานะเป็น `PAID` และ **หักโควต้าของ Business 1 ครั้ง** ภายใน Transaction เดียวกัน (เฉพาะเมื่อ Subscription ยัง `ACTIVE` และมี `quota_remaining > 0`) พร้อมบันทึก `api_key_usage_logs` (`QR_PAID`) หาก Order มี `api_key_id`"
+              "",
+              "**การจับคู่ Order:**",
+              "1. จับคู่ Order รับเงินปกติด้วย `lookup_key` **และ `payment_orders.line_user_id = source.userId`** (หลังธุรกิจผูก LINE แล้ว) — เมื่อสำเร็จจะเปลี่ยนสถานะเป็น `PAID` และ **หักโควต้าของ Business 1 ครั้ง** ภายใน Transaction เดียวกัน (เฉพาะเมื่อ Subscription ยัง `ACTIVE` และมี `quota_remaining > 0`) พร้อมบันทึก `api_key_usage_logs` (`QR_PAID`) หาก Order มี `api_key_id`",
+              "2. หากไม่พบ Order ปกติ จะลองจับคู่ **Order ผูก LINE** (`is_line_link = true`, `line_user_id IS NULL`) ที่ยอด/เวลาตรงกัน แล้วผูก `businesses.line_user_id = source.userId` ให้ทันที — Order ประเภทนี้ **ไม่หักโควต้า** และจะยิง Callback `line.linked` หาก Order มี `redirect_url`",
+              "3. หาก LINE User ID ถูกผูกกับธุรกิจอื่นไปแล้ว จะไม่ผูกซ้ำและบันทึกเป็น `NO_MATCH`"
             ].join("\n"),
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" },
