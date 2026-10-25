@@ -16,6 +16,7 @@ const TABLES = [
   'api_key_usage_logs',
   'payment_orders',
   'webhook_logs',
+  'business_email_otps',
 ] as const;
 
 /**

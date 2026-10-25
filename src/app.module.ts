@@ -14,6 +14,7 @@ import { DB_SCHEMA } from './database/database.schema';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { PackagesModule } from './packages/packages.module';
 import { PaymentModule } from './payment/payment.module';
+import { RegistrationModule } from './registration/registration.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { UsersModule } from './users/users.module';
 import { WebhookModule } from './webhook/webhook.module';
@@ -69,6 +70,7 @@ import { LoggerInterceptor } from './common/interceptor/logger.interceptor';
     PaymentModule,
     WebhookModule,
     DashboardModule,
+    RegistrationModule,
     DatabaseModule,
   ],
   controllers: [AppController],

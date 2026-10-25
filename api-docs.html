@@ -589,6 +589,57 @@
               }
             }
           },
+          RequestBusinessOtpRequest: {
+            type: "object",
+            required: ["email"],
+            properties: {
+              email: {
+                type: "string",
+                format: "email",
+                maxLength: 255,
+                example: "owner@coffee-shop.com",
+                description: "อีเมลที่ต้องการใช้สมัคร (ระบบจะ trim + แปลงเป็นตัวพิมพ์เล็ก) ต้องยังไม่ถูกผูกกับธุรกิจอื่น"
+              }
+            }
+          },
+          RequestBusinessOtpData: {
+            type: "object",
+            required: ["email", "expires_in", "resend_available_in"],
+            properties: {
+              email: {
+                type: "string",
+                format: "email",
+                example: "owner@coffee-shop.com"
+              },
+              expires_in: {
+                type: "integer",
+                example: 600,
+                description: "อายุของ OTP (วินาที) มาจาก `OTP_TTL_MINUTES` (default 10 นาที)"
+              },
+              resend_available_in: {
+                type: "integer",
+                example: 60,
+                description: "เวลาที่ต้องรอก่อนขอ OTP ใหม่ (วินาที) มาจาก `OTP_RESEND_COOLDOWN_SECONDS` (default 60)"
+              }
+            }
+          },
+          VerifyBusinessOtpRequest: {
+            allOf: [
+              { $ref: "#/components/schemas/RegisterBusinessRequest" },
+              {
+                type: "object",
+                required: ["otp"],
+                properties: {
+                  otp: {
+                    type: "string",
+                    pattern: "^\\d{6}$",
+                    example: "123456",
+                    description: "รหัส OTP 6 หลักที่ส่งไปยังอีเมล (หมดอายุตาม `OTP_TTL_MINUTES`)"
+                  }
+                }
+              }
+            ]
+          },
           GetTokenRequest: {
             type: "object",
             properties: {
@@ -2507,7 +2558,7 @@
                 }
               },
               "409": {
-                description: "ชื่อผู้ใช้ (username) ซ้ำกับที่มีอยู่ในระบบ",
+                description: "ชื่อผู้ใช้ (username) หรืออีเมล (email) ซ้ำกับที่มีอยู่ในระบบ",
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" },
@@ -2516,6 +2567,180 @@
                       status: 409,
                       correlation_id: "550e8400-e29b-41d4-a716-446655440000",
                       message: "Username already exists"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/auth/register-business/request-otp": {
+          post: {
+            tags: ["Auth"],
+            summary: "ขอรหัส OTP ทางอีเมลเพื่อสมัครธุรกิจด้วยตัวเอง (Public)",
+            description: "ส่งรหัส OTP 6 หลักไปยังอีเมลที่ระบุผ่าน SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_FROM_NAME`) ระบบเก็บเฉพาะ SHA-256 hash ของรหัส พร้อมอายุตาม `OTP_TTL_MINUTES` (default 10 นาที) และไม่คืนรหัสใน response เด็ดขาด — หากอีเมลถูกผูกกับธุรกิจแล้วจะตอบ `409`, หากขอถี่เกิน `OTP_RESEND_COOLDOWN_SECONDS` (default 60 วินาที) หรือเกิน `OTP_MAX_REQUESTS_PER_HOUR` (default 5 ครั้ง/ชั่วโมง) จะตอบ `429`, และหากยังไม่ได้ตั้งค่า SMTP หรือส่งอีเมลไม่สำเร็จจะตอบ `503` โดยไม่บันทึก OTP",
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/RequestBusinessOtpRequest" }
+                }
+              }
+            },
+            responses: {
+              "200": {
+                description: "ส่ง OTP ทางอีเมลสำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 200 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/RequestBusinessOtpData" }
+                      }
+                    }
+                  }
+                }
+              },
+              "400": {
+                description: "อีเมลไม่ถูกต้องตามรูปแบบ หรือไม่ส่งมา",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+                  }
+                }
+              },
+              "409": {
+                description: "อีเมลนี้ถูกใช้สมัครธุรกิจไปแล้ว",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 409,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Email is already registered"
+                    }
+                  }
+                }
+              },
+              "429": {
+                description: "ขอ OTP ถี่เกินกำหนด (cooldown หรือจำนวนครั้งต่อชั่วโมง)",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 429,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Please wait 60 seconds before requesting a new OTP"
+                    }
+                  }
+                }
+              },
+              "503": {
+                description: "ยังไม่ได้ตั้งค่า SMTP หรือส่งอีเมลไม่สำเร็จ",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 503,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Unable to send verification email; please try again later"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/api/v1/auth/register-business/verify-otp": {
+          post: {
+            tags: ["Auth"],
+            summary: "ยืนยัน OTP แล้วสร้างบัญชีธุรกิจด้วยตัวเอง (Public)",
+            description: "ตรวจรหัส OTP ล่าสุดของอีเมล (ต้องไม่หมดอายุ ยังไม่ถูกใช้ และพยายามผิดไม่เกิน `OTP_MAX_ATTEMPTS` default 5 ครั้ง) จากนั้นสร้าง `User` (`role = business`) และ `Business` ผ่าน logic เดียวกับ `POST /api/v1/auth/register-business` (Transaction เดียว รวมถึงการผูก `package_id` หากส่งมา) OTP จะถูกทำเครื่องหมายว่าถูกใช้หลังสร้างบัญชีสำเร็จเท่านั้น จึงแก้ข้อมูลที่ผิดแล้วลองใหม่ได้ภายในอายุ OTP",
+            parameters: [
+              { $ref: "#/components/parameters/CorrelationIdHeader" }
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/VerifyBusinessOtpRequest" }
+                }
+              }
+            },
+            responses: {
+              "201": {
+                description: "ยืนยัน OTP และสร้างบัญชีธุรกิจสำเร็จ (ยังไม่มี API Key)",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["ok", "status", "correlation_id", "data"],
+                      properties: {
+                        ok: { type: "boolean", example: true },
+                        status: { type: "integer", example: 201 },
+                        correlation_id: {
+                          type: "string",
+                          format: "uuid",
+                          example: "550e8400-e29b-41d4-a716-446655440000"
+                        },
+                        data: { $ref: "#/components/schemas/RegisterBusinessData" }
+                      }
+                    }
+                  }
+                }
+              },
+              "400": {
+                description: "OTP ไม่ถูกต้อง/หมดอายุ/ถูกใช้ไปแล้ว หรือข้อมูลไม่ผ่าน validation (เช่น `otp` ไม่ใช่ 6 หลัก, `email` ผิดรูปแบบ)",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 400,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "OTP is invalid or has expired"
+                    }
+                  }
+                }
+              },
+              "409": {
+                description: "อีเมลหรือ username ซ้ำกับที่มีอยู่ในระบบ (OTP ยังใช้ต่อได้จนกว่าจะหมดอายุ)",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 409,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Email is already registered"
+                    }
+                  }
+                }
+              },
+              "429": {
+                description: "พยายามกรอก OTP ผิดเกิน `OTP_MAX_ATTEMPTS` — ต้องขอรหัสใหม่",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 429,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: "Too many OTP attempts; please request a new code"
                     }
                   }
                 }

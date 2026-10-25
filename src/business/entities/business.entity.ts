@@ -30,7 +30,9 @@ export class Business {
   /**
    * อีเมลติดต่อของธุรกิจ — บังคับส่งตอนสมัครผ่าน `POST /auth/register-business`
    * แต่คอลัมน์เป็น nullable เพื่อรองรับธุรกิจเดิมที่สร้างไว้ก่อนมีฟิลด์นี้
+   * ใช้เป็นอีเมลยืนยันตัวตนสำหรับการสมัครด้วยตัวเอง (unique, 1 อีเมล = 1 ธุรกิจ)
    */
+  @Index('idx_businesses_email', { unique: true })
   @Column({ type: 'varchar', length: 255, name: 'email', nullable: true })
   email: string | null;
 

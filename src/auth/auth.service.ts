@@ -139,6 +139,14 @@ export class AuthService {
         throw new ConflictException('Username already exists');
       }
 
+      const existingBusiness = await businessesRepository.findOne({
+        where: { email: dto.email },
+      });
+
+      if (existingBusiness) {
+        throw new ConflictException('Email already exists');
+      }
+
       const businessRole = await rolesRepository.findOne({
         where: { name: RoleEnum.BUSINESS },
       });

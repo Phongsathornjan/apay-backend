@@ -237,6 +237,7 @@ describe('AuthService', () => {
   describe('registerBusiness', () => {
     beforeEach(() => {
       usersRepository.findOne.mockResolvedValue(null);
+      businessesRepository.findOne.mockResolvedValue(null);
       rolesRepository.findOne.mockResolvedValue({ id: 'role-business' });
       usersRepository.create.mockImplementation((data) => data);
       usersRepository.save.mockResolvedValue({
@@ -335,6 +336,21 @@ describe('AuthService', () => {
           promptpay_id: '0812345678',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('throws ConflictException when email already exists', async () => {
+      businessesRepository.findOne.mockResolvedValue({ id: 'existing-business' });
+
+      await expect(
+        service.registerBusiness({
+          username: 'merchant',
+          password: 'StrongPass123!',
+          business_name: 'Coffee Shop',
+          email: 'owner@coffee-shop.com',
+          promptpay_id: '0812345678',
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(usersRepository.save).not.toHaveBeenCalled();
     });
 
     it('throws InternalServerErrorException when business role is missing', async () => {
