@@ -683,7 +683,7 @@
                 default: false,
                 example: true,
                 description:
-                  "`true` = สร้าง QR แบบไม่มีเศษสตางค์ (ยอดลงท้าย `.00` เช่น `99.00`) โดยไม่จอง `decimal_ref` (`decimal_ref = 0`) เหมาะกับยอดที่ต้องตรงเป๊ะ; `false`/ไม่ส่ง = จอง `decimal_ref` 0.01–0.99 ตามปกติ (ในโหมดนี้ `amount` ต้องเป็นจำนวนเต็ม และธุรกิจต้องไม่มี QR ยอดเดียวกันค้างชำระอยู่)"
+                  "`true` = สร้าง QR แบบไม่มีเศษสตางค์ (ยอดลงท้าย `.00` เช่น `99.00`) โดยไม่จอง `decimal_ref` (`decimal_ref = 0`) เหมาะกับยอดที่ต้องตรงเป๊ะ; `false`/ไม่ส่ง = จอง `decimal_ref` 0.01–0.99 ตามปกติ (ในโหมดนี้ `amount` ต้องเป็นจำนวนเต็ม และมี QR ยอดเดียวกันค้างชำระได้ครั้งละ 1 ใบ — คำขอซ้ำภายใน 1 นาทีจะได้ `409` พร้อมให้รอ 1 นาที หรือใช้โหมดมีทศนิยมแทน)"
               }
             }
           },
@@ -2995,7 +2995,7 @@
               "- ตรวจสอบ `quota_remaining > 0` และ Rate Limit ต่อชั่วโมงของ Business (นับจาก `api_key_usage_logs.action = 'QR_CREATED'` ใน 60 นาทีล่าสุด) — เกินจะถูกปฏิเสธ `429`",
               "- ปรับสถานะออเดอร์ `UNVERIFIED` ที่หมดอายุแล้ว (`expires_at <= now`) ให้เป็น `EXPIRED` โดยอัตโนมัติ",
               "- ปัดเศษ `amount` ลงเป็นจำนวนเต็ม (`base_amount`) และจองค่า `decimal_ref` ที่ว่างอยู่ตั้งแต่ `0.01` ถึง `0.99`",
-              "- ถ้าส่ง `zero_decimal: true` จะสร้าง QR แบบไม่มีเศษสตางค์ (ยอดลงท้าย `.00` เช่น `99.00`) โดยตั้ง `decimal_ref = 0` และ **ไม่จอง slot** — `amount` ต้องเป็นจำนวนเต็ม และต้องไม่มี QR ยอดเดียวกันของธุรกิจนี้ค้างชำระอยู่ (มิฉะนั้น `409`)",
+              "- ถ้าส่ง `zero_decimal: true` จะสร้าง QR แบบไม่มีเศษสตางค์ (ยอดลงท้าย `.00` เช่น `99.00`) โดยตั้ง `decimal_ref = 0` และ **ไม่จอง slot** — `amount` ต้องเป็นจำนวนเต็ม และถ้ามีคำขอซ้ำยอดเดิมภายใน 1 นาทีจะถูกปฏิเสธ `409` พร้อมข้อความให้รอ 1 นาที หรือใช้โหมดมีทศนิยม (`zero_decimal: false`) แทนก่อน; หลังพ้น 1 นาทีจะสร้าง `.00` ยอดเดิมได้อีกครั้งและ QR ใบเก่าที่ค้างอยู่จะถูกปิดเป็น `EXPIRED`",
               "- คำนวณ `total_amount = base_amount + decimal_ref` และสร้าง PromptPay EMVCo Payload พร้อมรูป Base64 PNG Data URL (`qr_image`)",
               "- บันทึก `payment_orders.line_user_id` = `businesses.line_user_id` และ `is_line_link = false` เพื่อใช้จับคู่ Webhook ร่วมกับ `lookup_key`",
               "- กำหนดเวลาหมดอายุ `expires_at` = 5 นาทีนับจากเวลาที่สร้าง",
@@ -3103,15 +3103,29 @@
                 }
               },
               "409": {
-                description: "ทศนิยมอ้างอิง (0.01 - 0.99) สำหรับยอด `base_amount` นี้ถูกใช้งานเต็มทั้ง 99 ช่องในขณะนั้น หรือมี QR แบบ `zero_decimal` ยอดเดียวกันของธุรกิจนี้ค้างชำระอยู่",
+                description: "ทศนิยมอ้างอิง (0.01 - 0.99) สำหรับยอด `base_amount` นี้ถูกใช้งานเต็มทั้ง 99 ช่องในขณะนั้น หรือมีคำขอ QR แบบ `zero_decimal` ยอดเดิมซ้ำภายใน 1 นาที (ให้รอ 1 นาที หรือใช้โหมดมีทศนิยมแทนก่อน)",
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" },
-                    example: {
-                      ok: false,
-                      status: 409,
-                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
-                      message: "No available decimal reference slot for this amount, please retry shortly"
+                    examples: {
+                      zero_decimal_duplicate: {
+                        summary: "คำขอ .00 ซ้ำภายใน 1 นาที",
+                        value: {
+                          ok: false,
+                          status: 409,
+                          correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                          message: "รายการนี้ยังไม่พร้อมใช้งาน กรุณารอ 1 นาที หรือใช้โหมดมีทศนิยม (zero_decimal: false) แทนก่อน"
+                        }
+                      },
+                      decimal_slots_exhausted: {
+                        summary: "ทศนิยมอ้างอิงเต็ม 99 ช่อง",
+                        value: {
+                          ok: false,
+                          status: 409,
+                          correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                          message: "No available decimal reference slot for this amount, please retry shortly"
+                        }
+                      }
                     }
                   }
                 }

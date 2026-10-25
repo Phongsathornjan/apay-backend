@@ -195,7 +195,7 @@ describe('PaymentService', () => {
       );
     });
 
-    it('checks for a still-pending zero-decimal order of the same amount', async () => {
+    it('checks for a duplicate zero-decimal order created within the last minute', async () => {
       await service.createQrOrder(user, zeroDecimalDto);
 
       expect(ordersRepository.findOne).toHaveBeenCalledWith({
@@ -205,19 +205,55 @@ describe('PaymentService', () => {
           decimal_ref: 0,
           status: 'UNVERIFIED',
           expires_at: expect.anything(),
+          created_at: expect.anything(),
         },
         select: { id: true },
       });
+
+      const { where } = ordersRepository.findOne.mock.calls[0][0];
+      expect(where.expires_at.value).toBeInstanceOf(Date);
+      // กันคำขอซ้ำเฉพาะที่สร้างภายใน 60 วินาทีที่ผ่านมา (อ้างอิงเวลาเดียวกับ expires_at)
+      expect(
+        where.expires_at.value.getTime() - where.created_at.value.getTime(),
+      ).toBe(60 * 1000);
     });
 
-    it('rejects when the same zero-decimal amount is still pending', async () => {
+    it('rejects a duplicate request with a Thai message telling the caller to wait 1 minute or use decimal mode', async () => {
       ordersRepository.findOne.mockResolvedValue({ id: 'pending-order' });
 
       await expect(
         service.createQrOrder(user, zeroDecimalDto),
-      ).rejects.toBeInstanceOf(ConflictException);
+      ).rejects.toThrow(
+        'รายการนี้ยังไม่พร้อมใช้งาน กรุณารอ 1 นาที หรือใช้โหมดมีทศนิยม (zero_decimal: false) แทนก่อน',
+      );
       expect(ordersRepository.save).not.toHaveBeenCalled();
       expect(usageLogsRepository.save).not.toHaveBeenCalled();
+      expect(apiKeysRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('expires the older pending zero-decimal order once the 1-minute window has passed', async () => {
+      // findOne คืน null = ไม่มี QR ที่สร้างภายใน 1 นาที (ใบเก่าอยู่นอกช่วงกันซ้ำ)
+      ordersRepository.findOne.mockResolvedValue(null);
+
+      const result = await service.createQrOrder(user, zeroDecimalDto);
+
+      expect(result.decimal_ref).toBe(0);
+      expect(ordersRepository.update).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          business_id: 'business-1',
+          base_amount: 99,
+          decimal_ref: 0,
+          status: 'UNVERIFIED',
+          created_at: expect.anything(),
+        }),
+        { status: 'EXPIRED' },
+      );
+
+      const [criteria] = ordersRepository.update.mock.calls[1];
+      const { where } = ordersRepository.findOne.mock.calls[0][0];
+      // ใบที่สร้างก่อนจุดเริ่มช่วงกันซ้ำถูกปิดเป็น EXPIRED
+      expect(criteria.created_at.value).toEqual(where.created_at.value);
     });
 
     it('rejects a fractional amount because the fraction would be dropped', async () => {

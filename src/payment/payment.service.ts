@@ -25,6 +25,16 @@ import { PaymentOrder } from './entities/payment-order.entity';
 const QR_TTL_MS = 5 * 60 * 1000;
 const MAX_DECIMAL_REF = 99;
 
+/**
+ * ระยะเวลากันคำขอซ้ำของ QR แบบไม่มีทศนิยม (`.00`)
+ * ถ้ามีคำขอ `zero_decimal: true` ยอดเดิมเข้ามาภายใน 1 นาที จะตอบ `409` ให้รอ
+ * หรือใช้โหมดมีทศนิยม (`zero_decimal: false`) แทน — หลัง 1 นาที เวลาของ Order
+ * เปลี่ยนไปแล้ว จึงสร้าง `.00` ยอดเดิมได้อีกครั้งโดยไม่ชนกัน
+ */
+const ZERO_DECIMAL_DUPLICATE_WINDOW_MS = 60 * 1000;
+const ZERO_DECIMAL_DUPLICATE_MESSAGE =
+  'รายการนี้ยังไม่พร้อมใช้งาน กรุณารอ 1 นาที หรือใช้โหมดมีทศนิยม (zero_decimal: false) แทนก่อน';
+
 @Injectable()
 export class PaymentService {
   constructor(
@@ -151,10 +161,23 @@ export class PaymentService {
       if (zeroDecimal) {
         // `decimal_ref = 0` หมายถึงยอดลงท้าย `.00` — ต้องกันไม่ให้มี QR
         // ยอดเดียวกันค้างอยู่พร้อมกัน เพราะ `lookup_key` จะซ้ำกันจนจับคู่ไม่ได้
-        await this.assertNoPendingZeroDecimalOrder(
+        await this.assertNoRecentZeroDecimalOrder(
           ordersRepository,
           business.id,
           baseAmount,
+          now,
+        );
+        // คำขอที่ผ่านช่วงกันซ้ำแล้วยอดเดิมจะถูกแทนที่ด้วยใบใหม่ (QR เหมือนกันทุกไบต์
+        // เพราะยอดเท่ากัน) จึงปิดใบเก่าเพื่อให้เหลือ QR `.00` ค้างชำระเพียงใบเดียว
+        await ordersRepository.update(
+          {
+            business_id: business.id,
+            base_amount: baseAmount,
+            decimal_ref: 0,
+            status: PaymentOrderStatusEnum.UNVERIFIED,
+            created_at: LessThanOrEqual(this.getDuplicateWindowStart(now)),
+          },
+          { status: PaymentOrderStatusEnum.EXPIRED },
         );
         decimalRef = 0;
       } else {
@@ -343,11 +366,16 @@ export class PaymentService {
    * โหมดไม่มีทศนิยม (`decimal_ref = 0`) ใช้ยอดเดียวกับ `base_amount` ตรง ๆ
    * จึงต้องมี QR ค้างชำระ (UNVERIFIED + ยังไม่หมดอายุ) ได้ครั้งละ 1 ใบต่อยอด
    * ต่อธุรกิจเท่านั้น มิฉะนั้น `lookup_key` จะซ้ำกันและ Webhook จับคู่ผิดใบ
+   *
+   * คำขอซ้ำ (ยอดเดิม) ที่เข้ามาภายใน {@link ZERO_DECIMAL_DUPLICATE_WINDOW_MS}
+   * จะตอบ `409` พร้อมบอกให้รอ 1 นาที หรือใช้โหมดมีทศนิยมแทน เพราะ `lookup_key`
+   * ของ QR `.00` ไม่มีเศษให้แยก (ต่างจากโหมดปกติที่ใช้ `decimal_ref`)
    */
-  private async assertNoPendingZeroDecimalOrder(
+  private async assertNoRecentZeroDecimalOrder(
     ordersRepository: Repository<PaymentOrder>,
     businessId: string,
     baseAmount: number,
+    now: Date,
   ): Promise<void> {
     const pendingOrder = await ordersRepository.findOne({
       where: {
@@ -355,15 +383,18 @@ export class PaymentService {
         base_amount: baseAmount,
         decimal_ref: 0,
         status: PaymentOrderStatusEnum.UNVERIFIED,
-        expires_at: MoreThan(new Date()),
+        expires_at: MoreThan(now),
+        created_at: MoreThan(this.getDuplicateWindowStart(now)),
       },
       select: { id: true },
     });
 
     if (pendingOrder) {
-      throw new ConflictException(
-        'A QR for this amount is already pending, please wait until it expires or create the QR with decimal reference',
-      );
+      throw new ConflictException(ZERO_DECIMAL_DUPLICATE_MESSAGE);
     }
+  }
+
+  private getDuplicateWindowStart(now: Date): Date {
+    return new Date(now.getTime() - ZERO_DECIMAL_DUPLICATE_WINDOW_MS);
   }
 }
