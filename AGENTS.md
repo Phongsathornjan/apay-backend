@@ -19,7 +19,10 @@ pnpm format                              # Format with Prettier
 pnpm test                                # Run all unit tests (*.spec.ts)
 pnpm test -- src/webhook/utils/kbank-message.parser.spec.ts  # Run a single unit test
 pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
+pnpm create:admin                        # Create/update admin user from ADMIN_USERNAME/ADMIN_PASSWORD in .env
 ```
+
+> **Admin migration script note:** `pnpm create:admin` runs `scripts/create-admin.mts` directly with Node's built-in TypeScript type stripping (Node >= 22.18 / 24 — the repo/Docker use Node 24), so unlike `nest build` it does **not** compile first. The script imports the shared logic from `src/database/admin-user.util.ts` via an explicit `.ts` specifier (Node ESM resolution) and is invoked with `--disable-warning=MODULE_TYPELESS_PACKAGE_JSON` to silence the ESM-reparse warning.
 
 > **Jest & ESM note:** NestJS v12 packages (`@nestjs/common`, `@nestjs/testing`, ...) are ESM-only (`"type": "module"`). Jest needs Node's VM modules to `require()` them, so all `test*` scripts run Jest via `node --experimental-vm-modules node_modules/jest/bin/jest.js` (instead of the bare `jest` binary). Keep this flag when adding new test scripts, otherwise suites importing `@nestjs/testing` fail with `Must use import to load ES Module`.
 
@@ -85,8 +88,10 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - **Auto-Synchronize & Seeding**:
   - TypeORM `synchronize` is controlled by `ENV === 'development'` (checks `ENV`, **not** `NODE_ENV`). Before synchronizing, `AppModule` runs `CREATE SCHEMA IF NOT EXISTS "apay"`.
   - On bootstrap, `DatabaseSeederService` seeds default roles (`admin`, `business`), default master packages (`FREE`, `STARTER`, `PRO` — idempotent by `code`) and upserts the admin user if `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
+  - **Standalone admin migration (`pnpm create:admin` → `scripts/create-admin.mts`)**: runnable without booting/Nest or restarting the app. It loads `.env` (only when `DATABASE_URL`/`ADMIN_USERNAME`/`ADMIN_PASSWORD` are not already in the process env — real env wins), connects with `pg`, hashes the password with bcrypt (10 rounds), and inside one transaction: upserts the `admin` role in `apay.roles` if missing, then inserts a new `apay.users` row **or** updates the existing username (password, `role_id = admin`, `is_active = true`, `refresh_token_hash = NULL`, `updated_at = now()`). Idempotent, safe to re-run; shared logic + unit tests live in `src/database/admin-user.util.ts` / `admin-user.util.spec.ts`.
 - **Tables in `TABLES` (`src/database/database-security.service.ts`)**: `roles`, `users`, `businesses`, `packages`, `business_subscriptions`, `subscription_periods`, `api_keys`, `api_key_usage_logs`, `payment_orders`, `webhook_logs`.
 - **Schema Notes**:
+  - `businesses.email` (`varchar(255)`, nullable in DB) is the business contact email. It is **required** in the `POST /register-business` request (`@IsEmail`, max 255) and is returned in the response; the column stays nullable only to support businesses created before this field existed (migration `migrations/20261025_add_business_email.sql`).
   - `businesses.line_user_id` (`varchar(64)`, nullable, **unique**) is the LINE User ID bound to the business. It is `null` until the business completes the LINE linking flow, and a business **cannot create a payment QR** while it is `null`. One LINE User ID can only be bound to one business (unique index `idx_businesses_line_user_id`).
   - `businesses.api_key_prefix` / `businesses.api_key_hash` are **nullable legacy columns**; new API keys live in `api_keys` (multiple keys per business).
   - `payment_orders.api_key_id` is nullable and references `api_keys` with `onDelete: 'SET NULL'`.
@@ -99,7 +104,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - **Roles**: `admin` and `business`. Protected routes use `@UseGuards(JwtAuthGuard, RoleGuard)` and `@Roles(...)`. `RoleGuard` verifies the user exists, is active (`user.is_active`), has a valid role in `requiredRoles`, and syncs `request.user.role` from the database.
 - **Endpoints (`/api/v1/auth`)**:
   - `POST /login`: Authenticates `admin` or `business` user with username/password; verifies business `is_active` for `business` role. For `business` users the response `user` object also returns `line_user_id` (`null` when not linked yet) so the frontend knows whether to start the LINE linking flow.
-  - `POST /register-business` (`admin` only): Creates a `User` (`role = business`), a `Business`, and (optionally) the initial Master Package assignment — **all inside one TypeORM `DataSource.transaction`** (`manager` is passed to `SubscriptionsService.assignOrChangePackage`), so any failure (duplicate username, missing role, invalid/inactive `package_id`) rolls back everything. No API key is created at registration. Accepts optional `line_destination` and `line_user_id`. Returns `{ user_id, username, role, business_id, business_name, promptpay_id, line_user_id }`.
+  - `POST /register-business` (`admin` only): Creates a `User` (`role = business`), a `Business`, and (optionally) the initial Master Package assignment — **all inside one TypeORM `DataSource.transaction`** (`manager` is passed to `SubscriptionsService.assignOrChangePackage`), so any failure (duplicate username, missing role, invalid/inactive `package_id`) rolls back everything. No API key is created at registration. Requires `email` (valid email, max 255) and accepts optional `line_destination` and `line_user_id`. Returns `{ user_id, username, role, business_id, business_name, email, promptpay_id, line_user_id }`.
   - `POST /token`: Exchanges a business API key (from body `api_key` or `x-api-key` header) for an access/refresh JWT bundle. Looks up `api_keys` by `key_prefix` with `is_active = true` and not soft-deleted, verifies `business.is_active` and `user.is_active`, then compares `sha256(apiKey)` via timing-safe `safeCompare` against `api_keys.key_hash`.
   - `POST /refresh`: Rotates access & refresh tokens. If the refresh token payload has `api_key_id`, the key must still be active/not deleted and `api_keys.refresh_token_hash` must match (rotated on every refresh). Otherwise falls back to `users.refresh_token_hash` / `businesses.refresh_token_hash`.
 - **JWT Payload**: `sub`, `username`, `role`, `business_id`, `api_key_id` (`null` for username/password logins), `type` (`'access'` or `'refresh'`). `JwtStrategy` rejects payloads without `sub` or with `type !== 'access'`, and maps `api_key_id` to `req.user.apiKeyId`.
@@ -204,7 +209,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - `PORT`: HTTP server port (defaults to `3000`).
 - `DATABASE_URL`: PostgreSQL connection string.
 - `JWT_SECRET` / `JWT_REFRESH_SECRET`: Secrets for access and refresh tokens (`JWT_EXPIRES_IN` defaults to `15m`, `JWT_REFRESH_EXPIRES_IN` defaults to `7d`).
-- `ADMIN_USERNAME` / `ADMIN_PASSWORD`: Used by `DatabaseSeederService` to seed the initial `admin` user.
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD`: Used by `DatabaseSeederService` to seed the initial `admin` user and by `pnpm create:admin` (`scripts/create-admin.mts`) to create/update an admin user on demand.
 - `VERIFY_LINE_SIGNATURE`: Set to `'true'` to enforce `x-line-signature` verification using `LINE_CHANNEL_SECRET`.
 - `CORS_ORIGINS`: Comma-separated list of browser origins allowed to call the API (e.g. `http://localhost:3001,https://app.apay.com`). Defaults to the local dev origins. `*` allows any origin (forces `credentials: false`).
 - `CORS_ALLOW_ALL`: Set to `'true'` as an alternative to `CORS_ORIGINS=*`.

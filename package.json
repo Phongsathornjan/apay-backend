@@ -10,6 +10,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
+    "create:admin": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/create-admin.mts",
     "deploy": "nest deploy",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",

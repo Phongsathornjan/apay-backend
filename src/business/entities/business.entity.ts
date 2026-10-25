@@ -27,6 +27,13 @@ export class Business {
   @Column({ type: 'varchar', length: 150, name: 'business_name' })
   business_name: string;
 
+  /**
+   * อีเมลติดต่อของธุรกิจ — บังคับส่งตอนสมัครผ่าน `POST /auth/register-business`
+   * แต่คอลัมน์เป็น nullable เพื่อรองรับธุรกิจเดิมที่สร้างไว้ก่อนมีฟิลด์นี้
+   */
+  @Column({ type: 'varchar', length: 255, name: 'email', nullable: true })
+  email: string | null;
+
   @Column({ type: 'varchar', length: 20, name: 'promptpay_id' })
   promptpay_id: string;
 

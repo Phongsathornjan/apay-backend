@@ -1,4 +1,5 @@
 import {
+  IsEmail,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -22,6 +23,10 @@ export class RegisterBusinessDto {
   @IsNotEmpty()
   @MaxLength(150)
   business_name: string;
+
+  @IsEmail()
+  @MaxLength(255)
+  email: string;
 
   @IsString()
   @Matches(/^(\d{10}|\d{13})$/, {

@@ -473,7 +473,13 @@
           },
           RegisterBusinessRequest: {
             type: "object",
-            required: ["username", "password", "business_name", "promptpay_id"],
+            required: [
+              "username",
+              "password",
+              "business_name",
+              "email",
+              "promptpay_id"
+            ],
             properties: {
               username: {
                 type: "string",
@@ -492,6 +498,13 @@
                 maxLength: 150,
                 example: "APay Demo Coffee Shop",
                 description: "ชื่อธุรกิจหรือร้านค้า"
+              },
+              email: {
+                type: "string",
+                format: "email",
+                maxLength: 255,
+                example: "owner@coffee-shop.com",
+                description: "อีเมลติดต่อของธุรกิจ (บังคับ)"
               },
               promptpay_id: {
                 type: "string",
@@ -530,6 +543,7 @@
               "role",
               "business_id",
               "business_name",
+              "email",
               "promptpay_id",
               "line_user_id"
             ],
@@ -556,6 +570,12 @@
               business_name: {
                 type: "string",
                 example: "APay Demo Coffee Shop"
+              },
+              email: {
+                type: "string",
+                format: "email",
+                example: "owner@coffee-shop.com",
+                description: "อีเมลติดต่อของธุรกิจที่บันทึกไว้"
               },
               promptpay_id: {
                 type: "string",
@@ -2421,7 +2441,7 @@
           post: {
             tags: ["Auth"],
             summary: "ลงทะเบียนบัญชีธุรกิจใหม่ (เฉพาะ Admin)",
-            description: "สร้าง `User` (`role = business`) และ `Business` ภายใต้ Database Transaction เดียวกัน โดย **ยังไม่ออก API Key** ในขั้นตอนนี้ (ต้องสร้างภายหลังผ่าน `/api/v1/api-keys` เมื่อผูกแพ็กเกจแล้ว) สามารถระบุ `package_id` เพื่อผูกแพ็กเกจเริ่มต้นได้ทันที โดยการผูกแพ็กเกจจะอยู่ใน Transaction เดียวกัน หากผูกแพ็กเกจไม่สำเร็จ (เช่น ไม่พบแพ็กเกจหรือแพ็กเกจถูกปิดใช้งาน) ข้อมูล User และ Business จะถูก Rollback ทั้งหมด",
+            description: "สร้าง `User` (`role = business`) และ `Business` ภายใต้ Database Transaction เดียวกัน โดย **ยังไม่ออก API Key** ในขั้นตอนนี้ (ต้องสร้างภายหลังผ่าน `/api/v1/api-keys` เมื่อผูกแพ็กเกจแล้ว) ต้องระบุ `email` ของธุรกิจ (รูปแบบอีเมลที่ถูกต้อง, ไม่เกิน 255 ตัวอักษร) และสามารถระบุ `package_id` เพื่อผูกแพ็กเกจเริ่มต้นได้ทันที โดยการผูกแพ็กเกจจะอยู่ใน Transaction เดียวกัน หากผูกแพ็กเกจไม่สำเร็จ (เช่น ไม่พบแพ็กเกจหรือแพ็กเกจถูกปิดใช้งาน) ข้อมูล User และ Business จะถูก Rollback ทั้งหมด",
             security: [{ BearerAuth: [] }],
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" }
@@ -2465,7 +2485,7 @@
                 }
               },
               "400": {
-                description: "`package_id` ไม่พร้อมใช้งาน (ไม่พบแพ็กเกจหรือแพ็กเกจถูกปิดใช้งาน) — ข้อมูล User และ Business จะถูก Rollback",
+                description: "ข้อมูลไม่ผ่าน validation (เช่น `email` ไม่ถูกต้อง/ไม่ส่งมา, `promptpay_id` ผิดรูปแบบ) หรือ `package_id` ไม่พร้อมใช้งาน (ไม่พบแพ็กเกจหรือแพ็กเกจถูกปิดใช้งาน) — ข้อมูล User และ Business จะถูก Rollback",
                 content: {
                   "application/json": {
                     schema: { $ref: "#/components/schemas/ErrorEnvelope" },

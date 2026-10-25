@@ -164,6 +164,7 @@ export class AuthService {
         businessesRepository.create({
           user_id: user.id,
           business_name: dto.business_name,
+          email: dto.email,
           promptpay_id: dto.promptpay_id,
           api_key_prefix: null,
           api_key_hash: null,
@@ -191,6 +192,7 @@ export class AuthService {
         role: RoleEnum.BUSINESS,
         business_id: business.id,
         business_name: business.business_name,
+        email: business.email,
         promptpay_id: business.promptpay_id,
         line_user_id: business.line_user_id,
       };

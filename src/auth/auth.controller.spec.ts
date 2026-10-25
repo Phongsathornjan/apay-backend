@@ -48,6 +48,7 @@ describe('AuthController', () => {
       username: 'merchant',
       password: 'Password123!',
       business_name: 'Cafe',
+      email: 'owner@cafe.com',
       promptpay_id: '0812345678',
     };
     authService.registerBusiness.mockResolvedValue({ business_id: 'biz-1' });

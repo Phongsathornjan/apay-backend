@@ -255,11 +255,14 @@ describe('AuthService', () => {
         username: 'merchant',
         password: 'StrongPass123!',
         business_name: 'Coffee Shop',
+        email: 'owner@coffee-shop.com',
         promptpay_id: '0812345678',
       });
 
       expect(businessesRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
+          business_name: 'Coffee Shop',
+          email: 'owner@coffee-shop.com',
           api_key_prefix: null,
           api_key_hash: null,
           line_user_id: null,
@@ -270,6 +273,7 @@ describe('AuthService', () => {
         username: 'merchant',
         role: 'business',
         business_id: 'business-1',
+        email: 'owner@coffee-shop.com',
         line_user_id: null,
       });
       expect(result).not.toHaveProperty('api_key');
@@ -284,6 +288,7 @@ describe('AuthService', () => {
         username: 'merchant',
         password: 'StrongPass123!',
         business_name: 'Coffee Shop',
+        email: 'owner@coffee-shop.com',
         promptpay_id: '0812345678',
         line_user_id: 'U-owner',
         package_id: 'package-1',
@@ -307,6 +312,7 @@ describe('AuthService', () => {
           username: 'merchant',
           password: 'StrongPass123!',
           business_name: 'Coffee Shop',
+          email: 'owner@coffee-shop.com',
           promptpay_id: '0812345678',
           package_id: 'missing-package',
         }),
@@ -325,6 +331,7 @@ describe('AuthService', () => {
           username: 'merchant',
           password: 'StrongPass123!',
           business_name: 'Coffee Shop',
+          email: 'owner@coffee-shop.com',
           promptpay_id: '0812345678',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
@@ -338,6 +345,7 @@ describe('AuthService', () => {
           username: 'merchant',
           password: 'StrongPass123!',
           business_name: 'Coffee Shop',
+          email: 'owner@coffee-shop.com',
           promptpay_id: '0812345678',
         }),
       ).rejects.toBeInstanceOf(InternalServerErrorException);
