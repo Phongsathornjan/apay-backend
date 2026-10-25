@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   ConflictException,
   HttpException,
@@ -7,7 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { AuthService } from '../auth/auth.service';
+import { BusinessService } from '../business/business.service';
 import { Business } from '../business/entities/business.entity';
 import { sha256 } from '../common/utils/crypto.util';
 import { MailService } from '../mail/mail.service';
@@ -40,7 +40,7 @@ describe('RegistrationService', () => {
     findOne: jest.fn(),
   };
 
-  const authService = {
+  const businessService = {
     registerBusiness: jest.fn(),
   };
 
@@ -73,7 +73,7 @@ describe('RegistrationService', () => {
           useValue: otpRepository,
         },
         { provide: getRepositoryToken(Business), useValue: businessesRepository },
-        { provide: AuthService, useValue: authService },
+        { provide: BusinessService, useValue: businessService },
         { provide: MailService, useValue: mailService },
         { provide: ConfigService, useValue: configService },
       ],
@@ -202,13 +202,13 @@ describe('RegistrationService', () => {
 
     it('verifies the OTP, creates the business and consumes the OTP', async () => {
       otpRepository.findOne.mockResolvedValue(validOtp);
-      authService.registerBusiness.mockResolvedValue({
+      businessService.registerBusiness.mockResolvedValue({
         business_id: 'business-1',
       });
 
       const result = await service.verifyOtpAndRegister(REGISTER_PAYLOAD);
 
-      const registerArgs = authService.registerBusiness.mock.calls[0][0];
+      const registerArgs = businessService.registerBusiness.mock.calls[0][0];
 
       expect(registerArgs).toMatchObject({
         username: 'merchant',
@@ -223,13 +223,38 @@ describe('RegistrationService', () => {
       expect(result).toEqual({ business_id: 'business-1' });
     });
 
+    it('forwards every business field from the DTO and drops the otp', async () => {
+      otpRepository.findOne.mockResolvedValue(validOtp);
+      businessService.registerBusiness.mockResolvedValue({
+        business_id: 'business-1',
+      });
+
+      await service.verifyOtpAndRegister({
+        ...REGISTER_PAYLOAD,
+        line_destination: 'U-destination',
+        line_user_id: 'U-owner',
+        package_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
+      });
+
+      expect(businessService.registerBusiness).toHaveBeenCalledWith({
+        username: 'merchant',
+        password: 'StrongPass123!',
+        business_name: 'Coffee Shop',
+        email: 'owner@example.com',
+        promptpay_id: '0812345678',
+        line_destination: 'U-destination',
+        line_user_id: 'U-owner',
+        package_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
+      });
+    });
+
     it('rejects when there is no active OTP', async () => {
       otpRepository.findOne.mockResolvedValue(null);
 
       await expect(
         service.verifyOtpAndRegister(REGISTER_PAYLOAD),
       ).rejects.toBeInstanceOf(BadRequestException);
-      expect(authService.registerBusiness).not.toHaveBeenCalled();
+      expect(businessService.registerBusiness).not.toHaveBeenCalled();
     });
 
     it('rejects an expired OTP', async () => {
@@ -241,7 +266,7 @@ describe('RegistrationService', () => {
       await expect(
         service.verifyOtpAndRegister(REGISTER_PAYLOAD),
       ).rejects.toBeInstanceOf(BadRequestException);
-      expect(authService.registerBusiness).not.toHaveBeenCalled();
+      expect(businessService.registerBusiness).not.toHaveBeenCalled();
     });
 
     it('rejects a wrong OTP and increments the attempt counter', async () => {
@@ -255,7 +280,7 @@ describe('RegistrationService', () => {
         'attempts',
         1,
       );
-      expect(authService.registerBusiness).not.toHaveBeenCalled();
+      expect(businessService.registerBusiness).not.toHaveBeenCalled();
       expect(otpRepository.update).not.toHaveBeenCalled();
     });
 
@@ -270,7 +295,7 @@ describe('RegistrationService', () => {
       expect((error as HttpException).getStatus()).toBe(
         HttpStatus.TOO_MANY_REQUESTS,
       );
-      expect(authService.registerBusiness).not.toHaveBeenCalled();
+      expect(businessService.registerBusiness).not.toHaveBeenCalled();
     });
 
     it('rejects when the email is already registered', async () => {
@@ -280,12 +305,12 @@ describe('RegistrationService', () => {
       await expect(
         service.verifyOtpAndRegister(REGISTER_PAYLOAD),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(authService.registerBusiness).not.toHaveBeenCalled();
+      expect(businessService.registerBusiness).not.toHaveBeenCalled();
     });
 
     it('keeps the OTP usable when account creation fails', async () => {
       otpRepository.findOne.mockResolvedValue(validOtp);
-      authService.registerBusiness.mockRejectedValueOnce(
+      businessService.registerBusiness.mockRejectedValueOnce(
         new ConflictException('Username already exists'),
       );
 

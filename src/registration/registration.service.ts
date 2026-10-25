@@ -11,8 +11,8 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomInt } from 'node:crypto';
 import { IsNull, LessThan, MoreThan, Repository } from 'typeorm';
-import { AuthService } from '../auth/auth.service';
 import { Business } from '../business/entities/business.entity';
+import { BusinessService } from '../business/business.service';
 import { safeCompare, sha256 } from '../common/utils/crypto.util';
 import { MailService } from '../mail/mail.service';
 import { RequestBusinessOtpDto } from './dto/request-business-otp.dto';
@@ -41,7 +41,7 @@ export class RegistrationService {
     private readonly otpRepository: Repository<BusinessEmailOtp>,
     @InjectRepository(Business)
     private readonly businessesRepository: Repository<Business>,
-    private readonly authService: AuthService,
+    private readonly businessService: BusinessService,
     private readonly mailService: MailService,
     private readonly configService: ConfigService,
   ) {}
@@ -146,7 +146,8 @@ export class RegistrationService {
   }
 
   /**
-   * ตรวจ OTP แล้วสร้างบัญชีธุรกิจ (User + Business) ผ่าน `AuthService.registerBusiness`
+   * ตรวจ OTP แล้วสร้างบัญชีธุรกิจทันที (User + Business) ผ่าน
+   * `BusinessService.registerBusiness` — logic เดียวกับ `POST /auth/register-business`
    * - OTP ต้องไม่หมดอายุ ยังไม่ถูกใช้ และพยายามผิดไม่เกินกำหนด
    * - OTP จะถูกทำเครื่องหมายว่าถูกใช้ (`consumed_at`) หลังสมัครสำเร็จเท่านั้น
    *   เพื่อให้แก้ข้อมูลที่ผิด (เช่น username ซ้ำ) แล้วลองใหม่ได้ภายในเวลาที่ยังไม่หมดอายุ
@@ -187,16 +188,8 @@ export class RegistrationService {
       throw new ConflictException('Email is already registered');
     }
 
-    const result = await this.authService.registerBusiness({
-      username: dto.username,
-      password: dto.password,
-      business_name: dto.business_name,
-      email: dto.email,
-      promptpay_id: dto.promptpay_id,
-      line_destination: dto.line_destination,
-      line_user_id: dto.line_user_id,
-      package_id: dto.package_id,
-    });
+    const { otp: _otp, ...businessData } = dto;
+    const result = await this.businessService.registerBusiness(businessData);
 
     await this.otpRepository.update(
       { id: otp.id },

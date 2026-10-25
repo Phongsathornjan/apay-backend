@@ -1,24 +1,16 @@
-import {
-  ConflictException,
-  Injectable,
-  InternalServerErrorException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'node:crypto';
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { ApiKey } from '../api-keys/entities/api-key.entity';
 import { Business } from '../business/entities/business.entity';
 import { BusinessService } from '../business/business.service';
 import { safeCompare, sha256 } from '../common/utils/crypto.util';
 import { durationToSeconds } from '../common/utils/duration.util';
 import { RoleEnum } from '../enums/role.enum';
-import { SubscriptionsService } from '../subscriptions/subscriptions.service';
-import { Role } from '../users/entities/role.entity';
-import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { GetTokenDto } from './dto/get-token.dto';
 import { LoginDto } from './dto/login.dto';
@@ -26,7 +18,6 @@ import { RegisterBusinessDto } from './dto/register-business.dto';
 import { UserRole } from './types/auth-user.type';
 import { extractApiKeyPrefix } from './utils/api-key.util';
 
-const BCRYPT_ROUNDS = 10;
 const DEFAULT_ACCESS_EXPIRES_IN = '15m';
 const DEFAULT_REFRESH_EXPIRES_IN = '7d';
 
@@ -58,10 +49,8 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly usersService: UsersService,
     private readonly businessService: BusinessService,
-    private readonly subscriptionsService: SubscriptionsService,
     @InjectRepository(ApiKey)
     private readonly apiKeysRepository: Repository<ApiKey>,
-    private readonly dataSource: DataSource,
   ) {}
 
   async login(dto: LoginDto) {
@@ -121,90 +110,15 @@ export class AuthService {
   }
 
   /**
-   * สร้างเฉพาะ `User` (`role = business`) และ `Business`
+   * สร้าง `User` (`role = business`) และ `Business` พร้อมผูก Package (ถ้ามี)
+   * ตัว logic อยู่ใน `BusinessService.registerBusiness` เพื่อให้ endpoint สมัคร
+   * ด้วยตัวเอง (`verify-otp`) และ endpoint นี้ใช้เส้นทางเดียวกัน
+   *
    * ยังไม่สร้าง API Key ในขั้นตอนนี้ (ต้องสร้างภายหลังผ่าน `/api-keys`
    * เมื่อ Business มี Subscription ที่ ACTIVE แล้ว)
    */
   async registerBusiness(dto: RegisterBusinessDto) {
-    return this.dataSource.transaction(async (manager) => {
-      const usersRepository = manager.getRepository(User);
-      const rolesRepository = manager.getRepository(Role);
-      const businessesRepository = manager.getRepository(Business);
-
-      const existingUser = await usersRepository.findOne({
-        where: { username: dto.username },
-      });
-
-      if (existingUser) {
-        throw new ConflictException('Username already exists');
-      }
-
-      const existingBusiness = await businessesRepository.findOne({
-        where: { email: dto.email },
-      });
-
-      if (existingBusiness) {
-        throw new ConflictException('Email already exists');
-      }
-
-      const businessRole = await rolesRepository.findOne({
-        where: { name: RoleEnum.BUSINESS },
-      });
-
-      if (!businessRole) {
-        throw new InternalServerErrorException(
-          'Business role is not configured',
-        );
-      }
-
-      const password_hash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-
-      const user = await usersRepository.save(
-        usersRepository.create({
-          username: dto.username,
-          password_hash,
-          role_id: businessRole.id,
-          is_active: true,
-        }),
-      );
-
-      const business = await businessesRepository.save(
-        businessesRepository.create({
-          user_id: user.id,
-          business_name: dto.business_name,
-          email: dto.email,
-          promptpay_id: dto.promptpay_id,
-          api_key_prefix: null,
-          api_key_hash: null,
-          line_destination: dto.line_destination ?? null,
-          line_user_id: dto.line_user_id ?? null,
-          is_active: true,
-        }),
-      );
-
-      /**
-       * ผูก Package ใน Transaction เดียวกัน — หาก Package ไม่พร้อมใช้งาน
-       * (เช่น ถูกปิด/ไม่มีอยู่) การสร้าง User และ Business จะถูก Rollback ทั้งหมด
-       */
-      if (dto.package_id) {
-        await this.subscriptionsService.assignOrChangePackage(
-          business.id,
-          dto.package_id,
-          manager,
-        );
-      }
-
-      return {
-        user_id: user.id,
-        username: user.username,
-        role: RoleEnum.BUSINESS,
-        business_id: business.id,
-        business_name: business.business_name,
-        email: business.email,
-        promptpay_id: business.promptpay_id,
-        line_user_id: business.line_user_id,
-      };
-    });
+    return this.businessService.registerBusiness(dto);
   }
 
   /**

@@ -638,7 +638,8 @@
                   }
                 }
               }
-            ]
+            ],
+            description: "ข้อมูลธุรกิจครบชุด (เหมือน `RegisterBusinessRequest`: `username`, `password`, `business_name`, `email`, `promptpay_id` และ optional `line_destination`, `line_user_id`, `package_id`) บวก `otp` 6 หลัก — ใช้สร้าง `User` + `Business` ทันทีเมื่อ OTP ถูกต้อง"
           },
           GetTokenRequest: {
             type: "object",
@@ -2677,7 +2678,7 @@
           post: {
             tags: ["Auth"],
             summary: "ยืนยัน OTP แล้วสร้างบัญชีธุรกิจด้วยตัวเอง (Public)",
-            description: "ตรวจรหัส OTP ล่าสุดของอีเมล (ต้องไม่หมดอายุ ยังไม่ถูกใช้ และพยายามผิดไม่เกิน `OTP_MAX_ATTEMPTS` default 5 ครั้ง) จากนั้นสร้าง `User` (`role = business`) และ `Business` ผ่าน logic เดียวกับ `POST /api/v1/auth/register-business` (Transaction เดียว รวมถึงการผูก `package_id` หากส่งมา) OTP จะถูกทำเครื่องหมายว่าถูกใช้หลังสร้างบัญชีสำเร็จเท่านั้น จึงแก้ข้อมูลที่ผิดแล้วลองใหม่ได้ภายในอายุ OTP",
+            description: "ตรวจรหัส OTP ล่าสุดของอีเมล (ต้องไม่หมดอายุ ยังไม่ถูกใช้ และพยายามผิดไม่เกิน `OTP_MAX_ATTEMPTS` default 5 ครั้ง) เมื่อ OTP ถูกต้อง ระบบจะเรียก `BusinessService.registerBusiness` เพื่อสร้าง `User` (`role = business`) + `Business` ทันที (Transaction เดียวกัน รวมถึงการผูก `package_id` หากส่งมา) — logic เดียวกับ `POST /api/v1/auth/register-business` OTP จะถูกทำเครื่องหมายว่าถูกใช้หลังสร้างบัญชีสำเร็จเท่านั้น จึงแก้ข้อมูลที่ผิดแล้วลองใหม่ได้ภายในอายุ OTP",
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" }
             ],

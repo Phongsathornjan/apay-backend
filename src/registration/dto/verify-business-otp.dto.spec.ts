@@ -54,12 +54,48 @@ describe('VerifyBusinessOtpDto', () => {
     },
   );
 
-  it('still validates the inherited registration fields', async () => {
+  it('validates the business fields declared on this DTO', async () => {
     const errors = await validateDto({
       ...VALID_PAYLOAD,
       email: 'not-an-email',
     });
 
     expect(propertyErrors(errors)).toContain('email');
+  });
+
+  it.each(['username', 'password', 'business_name', 'email', 'promptpay_id'])(
+    'requires the business field %s',
+    async (field) => {
+      const payload: Record<string, unknown> = { ...VALID_PAYLOAD };
+      delete payload[field];
+
+      const errors = await validateDto(payload);
+
+      expect(propertyErrors(errors)).toContain(field);
+    },
+  );
+
+  it('rejects an invalid promptpay_id', async () => {
+    const errors = await validateDto({ ...VALID_PAYLOAD, promptpay_id: '123' });
+
+    expect(propertyErrors(errors)).toContain('promptpay_id');
+  });
+
+  it('accepts optional line fields and package_id but rejects a non-uuid package_id', async () => {
+    await expect(
+      validateDto({
+        ...VALID_PAYLOAD,
+        line_destination: 'U-destination',
+        line_user_id: 'U-owner',
+        package_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
+      }),
+    ).resolves.toHaveLength(0);
+
+    const errors = await validateDto({
+      ...VALID_PAYLOAD,
+      package_id: 'not-a-uuid',
+    });
+
+    expect(propertyErrors(errors)).toContain('package_id');
   });
 });

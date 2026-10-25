@@ -1,23 +1,13 @@
-import { ConfigService } from '@nestjs/config';
+﻿import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import {
-  BadRequestException,
-  ConflictException,
-  InternalServerErrorException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import { DataSource } from 'typeorm';
 import { ApiKey } from '../api-keys/entities/api-key.entity';
-import { Business } from '../business/entities/business.entity';
 import { BusinessService } from '../business/business.service';
 import { sha256 } from '../common/utils/crypto.util';
 import { RoleEnum } from '../enums';
-import { SubscriptionsService } from '../subscriptions/subscriptions.service';
-import { Role } from '../users/entities/role.entity';
-import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 
@@ -46,39 +36,12 @@ describe('AuthService', () => {
   const businessService = {
     findByUserId: jest.fn(),
     updateRefreshTokenHash: jest.fn(),
-  };
-
-  const subscriptionsService = {
-    assignOrChangePackage: jest.fn(),
+    registerBusiness: jest.fn(),
   };
 
   const apiKeysRepository = {
     findOne: jest.fn(),
     update: jest.fn(),
-  };
-
-  const usersRepository = {
-    findOne: jest.fn(),
-    create: jest.fn(),
-    save: jest.fn(),
-  };
-
-  const rolesRepository = {
-    findOne: jest.fn(),
-  };
-
-  const businessesRepository = {
-    findOne: jest.fn(),
-    create: jest.fn(),
-    save: jest.fn(),
-  };
-
-  const manager = {
-    getRepository: jest.fn(),
-  };
-
-  const dataSource = {
-    transaction: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -95,19 +58,6 @@ describe('AuthService', () => {
 
     apiKeysRepository.update.mockResolvedValue({ affected: 1 });
 
-    manager.getRepository.mockImplementation((entity: unknown) => {
-      if (entity === User) return usersRepository;
-      if (entity === Role) return rolesRepository;
-      if (entity === Business) return businessesRepository;
-      if (entity === ApiKey) return apiKeysRepository;
-
-      throw new Error('Unknown repository');
-    });
-
-    dataSource.transaction.mockImplementation(
-      async (callback: (m: unknown) => unknown) => callback(manager),
-    );
-
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
@@ -115,9 +65,7 @@ describe('AuthService', () => {
         { provide: ConfigService, useValue: configService },
         { provide: UsersService, useValue: usersService },
         { provide: BusinessService, useValue: businessService },
-        { provide: SubscriptionsService, useValue: subscriptionsService },
         { provide: getRepositoryToken(ApiKey), useValue: apiKeysRepository },
-        { provide: DataSource, useValue: dataSource },
       ],
     }).compile();
 
@@ -235,136 +183,38 @@ describe('AuthService', () => {
   });
 
   describe('registerBusiness', () => {
-    beforeEach(() => {
-      usersRepository.findOne.mockResolvedValue(null);
-      businessesRepository.findOne.mockResolvedValue(null);
-      rolesRepository.findOne.mockResolvedValue({ id: 'role-business' });
-      usersRepository.create.mockImplementation((data) => data);
-      usersRepository.save.mockResolvedValue({
-        id: 'user-1',
-        username: 'merchant',
-      });
-      businessesRepository.create.mockImplementation((data) => data);
-      businessesRepository.save.mockImplementation(async (data) => ({
-        id: 'business-1',
-        ...data,
-      }));
-    });
+    const payload = {
+      username: 'merchant',
+      password: 'StrongPass123!',
+      business_name: 'Coffee Shop',
+      email: 'owner@coffee-shop.com',
+      promptpay_id: '0812345678',
+    };
 
-    it('creates the user, business and optional package inside one transaction', async () => {
-      const result = await service.registerBusiness({
-        username: 'merchant',
-        password: 'StrongPass123!',
-        business_name: 'Coffee Shop',
-        email: 'owner@coffee-shop.com',
-        promptpay_id: '0812345678',
-      });
-
-      expect(businessesRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          business_name: 'Coffee Shop',
-          email: 'owner@coffee-shop.com',
-          api_key_prefix: null,
-          api_key_hash: null,
-          line_user_id: null,
-        }),
-      );
-      expect(result).toMatchObject({
+    it('delegates user + business creation to BusinessService.registerBusiness', async () => {
+      businessService.registerBusiness.mockResolvedValue({
         user_id: 'user-1',
         username: 'merchant',
-        role: 'business',
+        role: RoleEnum.BUSINESS,
         business_id: 'business-1',
-        email: 'owner@coffee-shop.com',
-        line_user_id: null,
-      });
-      expect(result).not.toHaveProperty('api_key');
-      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
-      expect(
-        subscriptionsService.assignOrChangePackage,
-      ).not.toHaveBeenCalled();
-    });
-
-    it('assigns the requested package within the same transaction', async () => {
-      await service.registerBusiness({
-        username: 'merchant',
-        password: 'StrongPass123!',
         business_name: 'Coffee Shop',
         email: 'owner@coffee-shop.com',
         promptpay_id: '0812345678',
-        line_user_id: 'U-owner',
-        package_id: 'package-1',
+        line_user_id: null,
       });
 
-      expect(businessesRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({ line_user_id: 'U-owner' }),
-      );
-      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
-      expect(
-        subscriptionsService.assignOrChangePackage,
-      ).toHaveBeenCalledWith('business-1', 'package-1', manager);
+      await expect(service.registerBusiness(payload)).resolves.toMatchObject({
+        business_id: 'business-1',
+        role: 'business',
+      });
+      expect(businessService.registerBusiness).toHaveBeenCalledWith(payload);
     });
 
-    it('propagates package assignment errors so the transaction rolls back', async () => {
-      const error = new BadRequestException('Package is not available');
-      subscriptionsService.assignOrChangePackage.mockRejectedValueOnce(error);
+    it('propagates registration errors from BusinessService', async () => {
+      const error = new Error('Email already exists');
+      businessService.registerBusiness.mockRejectedValueOnce(error);
 
-      await expect(
-        service.registerBusiness({
-          username: 'merchant',
-          password: 'StrongPass123!',
-          business_name: 'Coffee Shop',
-          email: 'owner@coffee-shop.com',
-          promptpay_id: '0812345678',
-          package_id: 'missing-package',
-        }),
-      ).rejects.toBe(error);
-
-      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
-      expect(usersRepository.save).toHaveBeenCalledTimes(1);
-      expect(businessesRepository.save).toHaveBeenCalledTimes(1);
-    });
-
-    it('throws ConflictException when username already exists', async () => {
-      usersRepository.findOne.mockResolvedValue({ id: 'existing-user' });
-
-      await expect(
-        service.registerBusiness({
-          username: 'merchant',
-          password: 'StrongPass123!',
-          business_name: 'Coffee Shop',
-          email: 'owner@coffee-shop.com',
-          promptpay_id: '0812345678',
-        }),
-      ).rejects.toBeInstanceOf(ConflictException);
-    });
-
-    it('throws ConflictException when email already exists', async () => {
-      businessesRepository.findOne.mockResolvedValue({ id: 'existing-business' });
-
-      await expect(
-        service.registerBusiness({
-          username: 'merchant',
-          password: 'StrongPass123!',
-          business_name: 'Coffee Shop',
-          email: 'owner@coffee-shop.com',
-          promptpay_id: '0812345678',
-        }),
-      ).rejects.toBeInstanceOf(ConflictException);
-      expect(usersRepository.save).not.toHaveBeenCalled();
-    });
-
-    it('throws InternalServerErrorException when business role is missing', async () => {
-      rolesRepository.findOne.mockResolvedValue(null);
-
-      await expect(
-        service.registerBusiness({
-          username: 'merchant',
-          password: 'StrongPass123!',
-          business_name: 'Coffee Shop',
-          email: 'owner@coffee-shop.com',
-          promptpay_id: '0812345678',
-        }),
-      ).rejects.toBeInstanceOf(InternalServerErrorException);
+      await expect(service.registerBusiness(payload)).rejects.toBe(error);
     });
   });
 
