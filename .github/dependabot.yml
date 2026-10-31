@@ -1,0 +1,62 @@
+
+version: 2
+
+updates:
+  # Node.js Dependencies
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "02:00"
+      timezone: "Asia/Bangkok"
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - security
+    groups:
+      production-dependencies:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      development-dependencies:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  # Docker Base Images
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "02:30"
+      timezone: "Asia/Bangkok"
+    open-pull-requests-limit: 5
+    labels:
+      - docker
+      - dependencies
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "03:00"
+      timezone: "Asia/Bangkok"
+    open-pull-requests-limit: 5
+    labels:
+      - github-actions
+      - dependencies
+
+  # Docker Compose
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "03:30"
+      timezone: "Asia/Bangkok"
+    open-pull-requests-limit: 5
+    labels:
+      - docker-compose
+      - dependencies
