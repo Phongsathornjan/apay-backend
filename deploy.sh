@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -Ee
+set -Eeuo pipefail
 
 # ==================================
 # Configuration
@@ -10,18 +10,45 @@ BRANCH="main"
 PM2_NAME="apay-backend"
 ENVIRONMENT="PROD"
 
-WEBHOOK_URL="https://discord.com/api/webhooks/1566363340253433856/I3oDNR378u-0cRZtKooS6voYT0BII1r_IZy2JCdPmx1tc2O6ZxixKVChUCxMtoKelLgQ"
+# Set DISCORD_WEBHOOK_URL as environment variable
 
 # ==================================
-# Webhook Notification
+# Discord Webhook Notification
 # ==================================
 send_webhook() {
     local message="$1"
 
-    curl -sS -X POST "$WEBHOOK_URL" \
+    if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
+        echo "WARNING: DISCORD_WEBHOOK_URL is not configured"
+        return 0
+    fi
+
+    local payload
+    payload=$(python3 -c \
+        'import json,sys; print(json.dumps({"content":sys.argv[1]}))' \
+        "$message")
+
+    local response
+    response=$(curl -sS \
+        --max-time 15 \
+        -X POST "$DISCORD_WEBHOOK_URL" \
         -H "Content-Type: application/json" \
-        -d "{\"text\":\"$message\"}" \
-        > /dev/null || echo "WARNING: Webhook notification failed"
+        -d "$payload" \
+        -w '\n%{http_code}') || {
+            echo "WARNING: Discord webhook request failed"
+            return 0
+        }
+
+    local http_code="${response##*$'\n'}"
+
+    if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+        echo "Discord notification sent (HTTP $http_code)"
+    else
+        echo "WARNING: Discord webhook returned HTTP $http_code"
+        echo "$response"
+    fi
+
+    return 0
 }
 
 # ==================================
@@ -30,6 +57,8 @@ send_webhook() {
 on_error() {
     local exit_code=$?
     local line_number=$1
+
+    trap - ERR
 
     send_webhook "❌ [${ENVIRONMENT}] APay Backend Deployment FAILED! Branch: ${BRANCH} | Line: ${line_number} | Exit code: ${exit_code}"
 
