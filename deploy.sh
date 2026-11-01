@@ -15,8 +15,15 @@ ENVIRONMENT="PROD"
 # ==================================
 # Discord Webhook Notification
 # ==================================
+
 send_webhook() {
-    local message="$1"
+    local status="$1"
+    local title="$2"
+    local description="$3"
+    local color="$4"
+    local branch="$5"
+    local process="$6"
+    local details="${7:-}"
 
     if [[ -z "${DISCORD_WEBHOOK_URL:-}" ]]; then
         echo "WARNING: DISCORD_WEBHOOK_URL is not configured"
@@ -24,28 +31,61 @@ send_webhook() {
     fi
 
     local payload
-    payload=$(python3 -c \
-        'import json,sys; print(json.dumps({"content":sys.argv[1]}))' \
-        "$message")
 
-    local response
-    response=$(curl -sS \
+    payload=$(python3 -c '
+    import json
+    import sys
+    from datetime import datetime, timezone
+
+    status, title, description, color, branch, process, details = sys.argv[1:]
+
+    embed = {
+        "title": title,
+        "description": description,
+        "color": int(color, 16),
+        "fields": [
+            {"name": "Environment", "value": "PRODUCTION", "inline": True},
+            {"name": "Branch", "value": f"`{branch}`", "inline": True},
+            {"name": "PM2 Process", "value": f"`{process}`", "inline": True},
+        ],
+        "footer": {
+            "text": "APay CI/CD Deployment Monitor"
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    if details:
+        embed["fields"].append({
+            "name": "Details",
+            "value": details[:1024],
+            "inline": False
+        })
+
+    print(json.dumps({
+        "username": "APay Deployment Monitor",
+        "embeds": [embed]
+    }))
+    ' "$status" "$title" "$description" "$color" \
+    "$branch" "$process" "$details")
+
+    local http_code
+
+    http_code=$(curl -sS \
         --max-time 15 \
+        -o /tmp/apay-discord-response \
+        -w '%{http_code}' \
         -X POST "$DISCORD_WEBHOOK_URL" \
         -H "Content-Type: application/json" \
-        -d "$payload" \
-        -w '\n%{http_code}') || {
+        -d "$payload") || {
             echo "WARNING: Discord webhook request failed"
             return 0
         }
-
-    local http_code="${response##*$'\n'}"
 
     if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
         echo "Discord notification sent (HTTP $http_code)"
     else
         echo "WARNING: Discord webhook returned HTTP $http_code"
-        echo "$response"
+        cat /tmp/apay-discord-response
     fi
 
     return 0
@@ -60,7 +100,14 @@ on_error() {
 
     trap - ERR
 
-    send_webhook "❌ [${ENVIRONMENT}] APay Backend Deployment FAILED! Branch: ${BRANCH} | Line: ${line_number} | Exit code: ${exit_code}"
+    send_webhook \
+        "FAILED" \
+        "❌ Deployment Failed" \
+        "APay Backend deployment encountered an error." \
+        "E74C3C" \
+        "$BRANCH" \
+        "$PM2_NAME" \
+        "Line: ${line_number}\nExit Code: ${exit_code}"
 
     echo "Deployment failed at line $line_number"
     exit "$exit_code"
@@ -76,7 +123,13 @@ echo " Starting APay Backend Deploy"
 echo " Environment: $ENVIRONMENT"
 echo "================================"
 
-send_webhook "🚀 [${ENVIRONMENT}] APay Backend deployment started. Branch: ${BRANCH}"
+send_webhook \
+    "STARTED" \
+    "🚀 Deployment Started" \
+    "APay Backend deployment is starting..." \
+    "3498DB" \
+    "$BRANCH" \
+    "$PM2_NAME"
 
 cd "$APP_DIR"
 
@@ -101,6 +154,12 @@ echo "================================"
 
 pm2 status "$PM2_NAME"
 
-send_webhook "✅ [${ENVIRONMENT}] APay Backend deployment SUCCESS! Branch: ${BRANCH} | PM2: ${PM2_NAME}"
+send_webhook \
+    "SUCCESS" \
+    "✅ Deployment Successful" \
+    "APay Backend has been successfully deployed!" \
+    "2ECC71" \
+    "$BRANCH" \
+    "$PM2_NAME"
 
 trap - ERR
