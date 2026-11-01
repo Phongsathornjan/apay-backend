@@ -3,11 +3,10 @@
 > **กฎเหล็ก (Mandatory Maintenance Rule):**
 > หากมีการเพิ่ม แก้ไข หรือเปลี่ยนแปลง Business Logic, โครงสร้าง Database/Entity, API Endpoint หรือ Flow การทำงานใดๆ ในโปรเจกต์นี้ **ต้องมาอัปเดตเอกสารให้ตรงกับโค้ดล่าสุดทุกครั้ง ดังนี้**
 > 1. อัปเดตไฟล์ `AGENTS.md` นี้ให้ตรงกับโค้ดล่าสุด
-> 2. อัปเดตไฟล์ `api-docs.html` (Interactive Swagger UI) ให้ตรงกับ API Endpoint, Request/Response DTO และ Schema ล่าสุด
-> 3. เขียนหรืออัปเดต unit test ในไฟล์ `*.spec.ts` ทุกครั้งที่มีการ implement หรือแก้ไขโค้ด
-> *(Whenever any business logic, database entity/schema, API endpoint, or execution flow is added or modified, you MUST update BOTH this `AGENTS.md` file AND `api-docs.html` in the same task. In addition, every implementation or code change MUST include new/updated unit tests in a `*.spec.ts` file.)*
+> 2. เขียนหรืออัปเดต unit test ในไฟล์ `*.spec.ts` ทุกครั้งที่มีการ implement หรือแก้ไขโค้ด
+> *(Whenever any business logic, database entity/schema, API endpoint, or execution flow is added or modified, you MUST update this `AGENTS.md` file in the same task. In addition, every implementation or code change MUST include new/updated unit tests in a `*.spec.ts` file.)*
 >
-> **Cross-repo sync ของ `api-docs.html` ไม่อยู่ในไฟล์นี้แล้ว** — ย้ายไปเป็น project skill ที่ [`.opencode/skills/sync-api-docs/SKILL.md`](.opencode/skills/sync-api-docs/SKILL.md) (skill id: `sync-api-docs`) ให้โหลด skill นี้ทุกครั้งที่ `api-docs.html` เปลี่ยน
+> **API docs (`api-docs.html`) ไม่ได้อยู่ใน repo นี้แล้ว** — ถ้าต้องการดู api-docs ให้ดูจาก link นี้: <https://github.com/Phongsathornjan/apay-backend/blob/main/api-docs.html>
 
 ## Commands
 
@@ -55,7 +54,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 ## Architecture & Conventions
 
 - **Routing & Versioning**: Global prefix is `/api` with URI versioning enabled (`src/main.ts`). Controllers declaring `@Controller({ path: '...', version: '1' })` are served at `/api/v1/...`.
-- **API Documentation (`api-docs.html`)**: Standalone interactive Swagger UI (`OpenAPI 3.0.3`) specification file at the project root covering all `/api/v1/...` endpoints, schemas, and webhook callbacks. Keep `api-docs.html` updated whenever endpoints or DTOs change. **Whenever this file changes you must also mirror it into the `apay-backoffice` repo — load the project skill `sync-api-docs` (`.opencode/skills/sync-api-docs/SKILL.md`).**
+- **API Documentation**: repo นี้ไม่มีไฟล์ `api-docs.html` แล้ว — ถ้าต้องการดู api-docs ให้ดูจาก link นี้: <https://github.com/Phongsathornjan/apay-backend/blob/main/api-docs.html> (Standalone interactive Swagger UI, `OpenAPI 3.0.3`, ครอบคลุมทุก endpoint `/api/v1/...`, schema และ webhook callbacks)
 - **Response & Error Envelope**:
   - Success responses are automatically wrapped by global `ResponseInterceptor` into `{ ok: true, status, correlation_id, data }`. Return raw data from controllers—do not manually wrap with `{ ok, data }`.
   - `HttpException` errors are formatted by global `HttpErrorFilter` into `{ ok: false, status, correlation_id, message }`.
@@ -219,7 +218,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 
 - `ENV`: Set to `development` to enable TypeORM `synchronize` (default off otherwise).
 - `PORT`: HTTP server port (defaults to `3000`).
-- `DATABASE_URL`: PostgreSQL connection string.
+- `DATABASE_URL`: PostgreSQL connection string. **On Supabase use the Supavisor pooler host, not the direct `db.<project-ref>.supabase.co` host** (the direct host is IPv6-only and resolves to a single AAAA record with no A record, so IPv4-only machines/NAT/CI/Docker fail with `getaddrinfo ENOTFOUND`). Format: `postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres` (port `5432` = session mode, keeps prepared statements/transactions working for TypeORM; port `6543` = transaction mode, only for short-lived/serverless clients). The current project `wsxgyyigdomwabrpkmlg` lives in `ap-northeast-1`. No `ssl` block is set in `TypeOrmModule`, so the URL must point at a host that accepts plaintext connections (the pooler does).
 - `JWT_SECRET` / `JWT_REFRESH_SECRET`: Secrets for access and refresh tokens (`JWT_EXPIRES_IN` defaults to `15m`, `JWT_REFRESH_EXPIRES_IN` defaults to `7d`).
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD`: Used by `DatabaseSeederService` to seed the initial `admin` user and by `pnpm create:admin` (`scripts/create-admin.mts`) to create/update an admin user on demand.
 - `VERIFY_LINE_SIGNATURE`: Set to `'true'` to enforce `x-line-signature` verification using `LINE_CHANNEL_SECRET`.

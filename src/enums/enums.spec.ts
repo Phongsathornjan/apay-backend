@@ -13,7 +13,7 @@ import {
 /**
  * Enum ในโฟลเดอร์นี้คือ "single source of truth" ของค่าที่ถูกเก็บลง Database
  * และค่าที่รับ/ส่งผ่าน API ดังนั้น test ชุดนี้จึงยึดสัญญา (contract) เป็นหลัก
- * ถ้ามีการเพิ่ม/ลบ/เปลี่ยนค่า enum ต้องอัปเดตทั้ง entity, api-docs.html และ test นี้พร้อมกัน
+ * ถ้ามีการเพิ่ม/ลบ/เปลี่ยนค่า enum ต้องอัปเดตทั้ง entity และ test นี้พร้อมกัน
  */
 describe('Domain enums', () => {
   describe('RoleEnum', () => {
