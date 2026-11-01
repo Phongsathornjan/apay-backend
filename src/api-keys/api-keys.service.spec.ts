@@ -30,7 +30,8 @@ function buildSubscription(
     rate_limit_per_hour: 60,
     max_api_keys: 3,
     current_period_start: new Date('2026-10-01T00:00:00.000Z'),
-    current_period_end: new Date('2026-11-01T00:00:00.000Z'),
+    // ใช้วันที่ในอนาคตไกล ๆ เพื่อไม่ให้เทสต์พังตามเวลาจริง (เดิมเป็น 2026-11-01)
+    current_period_end: new Date('2030-01-01T00:00:00.000Z'),
     ...overrides,
   } as BusinessSubscription;
 }

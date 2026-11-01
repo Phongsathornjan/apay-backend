@@ -53,7 +53,8 @@ export class PaymentOrder {
 
   /**
    * LINE User ID ที่ผูกกับ Order นี้ ใช้จับคู่ Webhook เพิ่มเติมจาก `lookup_key`
-   * - Order รับเงินปกติ: บันทึกจาก `businesses.line_user_id` ตอนสร้าง QR (ลูกค้าต้องมีค่า)
+   * - Order รับเงินปกติ: บันทึกจาก `businesses.line_user_id` ตอนสร้าง QR (เป็น `null`
+   *   ได้ ถ้าธุรกิจยังไม่ผูก LINE — Webhook จะจับคู่ด้วยยอดเงิน + วันเวลาแทน)
    * - Order สำหรับผูก LINE (`is_line_link = true`): เป็น `null` จนกว่า Webhook จะมาผูกให้
    */
   @Column({ type: 'varchar', length: 64, name: 'line_user_id', nullable: true })

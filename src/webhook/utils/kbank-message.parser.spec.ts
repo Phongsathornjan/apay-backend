@@ -27,6 +27,35 @@ describe('parseKBankMessage', () => {
     expect(result?.transferTime.toISOString()).toBe('2026-01-01T02:05:00.000Z');
   });
 
+  it('parses a Thai month name date from the KBank app notification', () => {
+    const result = parseKBankMessage(
+      'บัญชี xxx-x-x8583-x  จำนวนเงิน 1.00 บาท  วันที่ 1 พ.ย. 69  22:57 น.',
+    );
+
+    expect(result?.amount).toBe('1.00');
+    expect(result?.dateStr).toBe('20261101');
+    expect(result?.transferTime.toISOString()).toBe('2026-11-01T15:57:00.000Z');
+    expect(result?.datetimeStr).toBe('20261101 22:57');
+  });
+
+  it('parses a full Thai month name and a 4-digit Buddhist year', () => {
+    const result = parseKBankMessage(
+      'จำนวนเงิน 250.00 บาท วันที่ 31 ธันวาคม 2569 08:05 น.',
+    );
+
+    expect(result?.amount).toBe('250.00');
+    expect(result?.dateStr).toBe('20261231');
+    expect(result?.transferTime.toISOString()).toBe('2026-12-31T01:05:00.000Z');
+  });
+
+  it('parses a Thai month abbreviation without dots', () => {
+    const result = parseKBankMessage('จำนวนเงิน 45.75 บาท วันที่ 9 มีค 69 13:40 น.');
+
+    expect(result?.amount).toBe('45.75');
+    expect(result?.dateStr).toBe('20260309');
+    expect(result?.transferTime.toISOString()).toBe('2026-03-09T06:40:00.000Z');
+  });
+
   it('falls back to a generic decimal when only context keywords are present', () => {
     const result = parseKBankMessage('โอนเข้า 500.00 บาท');
 

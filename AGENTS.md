@@ -94,7 +94,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - **Schema Notes**:
   - `businesses.email` (`varchar(255)`, nullable in DB, **unique** via `idx_businesses_email`) is the business contact email. It is **required** in the `POST /register-business` request (`@IsEmail`, max 255, normalized to lowercase/trimmed by `@Transform`) and is returned in the response; the column stays nullable only to support businesses created before this field existed (migrations `migrations/20261025_add_business_email.sql`, `migrations/20261025_add_business_email_otp.sql`). One email can only be bound to one business.
   - `business_email_otps` stores self-registration OTPs: `email` (`varchar(255)`), `otp_hash` (`varchar(128)`, **SHA-256 only — never the raw code**), `attempts` (`integer`, default `0`), `expires_at`, `consumed_at` (nullable), `created_at`, indexed by `idx_business_email_otps_email_created` (`email`, `created_at`).
-  - `businesses.line_user_id` (`varchar(64)`, nullable, **unique**) is the LINE User ID bound to the business. It is `null` until the business completes the LINE linking flow, and a business **cannot create a payment QR** while it is `null`. One LINE User ID can only be bound to one business (unique index `idx_businesses_line_user_id`).
+  - `businesses.line_user_id` (`varchar(64)`, nullable, **unique**) is the LINE User ID bound to the business. It is `null` until the business completes the LINE linking flow (the flow is **optional** — a business can create payment QRs without it; those orders are matched by amount + datetime instead). One LINE User ID can only be bound to one business (unique index `idx_businesses_line_user_id`).
   - `businesses.api_key_prefix` / `businesses.api_key_hash` are **nullable legacy columns**; new API keys live in `api_keys` (multiple keys per business).
   - `payment_orders.api_key_id` is nullable and references `api_keys` with `onDelete: 'SET NULL'`.
   - `payment_orders.line_user_id` (nullable) stores the LINE User ID used for matching; `payment_orders.is_line_link` (`false` by default) marks a LINE-linking verification order. Link orders accept an optional `redirect_url` (used only for the `line.linked` callback) and are indexed by `idx_payment_orders_line_lookup`.
@@ -148,9 +148,10 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 ### 5. Payment Orders & PromptPay QR (`src/payment/`)
 - **Endpoints (`/api/v1/payments`)**:
   - `POST /line/link-qr` (`business`, `admin`): Creates a LINE-linking verification order (`is_line_link = true`) with a total amount between **0.01 and 0.99** (`base_amount = 0`, `decimal_ref` allocated from `0.01`–`0.99`). It does **not** check quota/rate limit, does **not** write usage logs, and does not attach an `api_key_id`. **Optional body** `{ redirect_url }` (`CreateLinkQrDto`, `@IsUrl({ require_tld: false })`, max 2048): when the QR is paid the backend POSTs a `line.linked` callback to it (5s timeout, records `callback_sent` / `callback_status_code`); without it there is no callback. Throws `409 Conflict` when the business already has `line_user_id`.
-  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. **Requires `businesses.line_user_id` to be set** (otherwise `403 ForbiddenException('Business is not linked to a LINE user yet; ...')`), and stores it on `payment_orders.line_user_id` (`is_line_link = false`). Also requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). **Optional `zero_decimal: true`** (`CreateQrDto`, `@IsBoolean`, default `false`): creates a QR with a whole-baht total (`.00`, e.g. `99.00`) instead of allocating a decimal reference — `amount` must then be a whole number (otherwise `400 BadRequestException`) and a duplicate request for the same `base_amount` made **within the last 60 seconds** is rejected with `409 Conflict` and a Thai message telling the caller to wait 1 minute or use decimal mode (`zero_decimal: false`) instead. If the JWT contains `api_key_id`, the key must still be active/not deleted and belong to the business, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
+  - `POST /qr` (`business`, `admin`): Creates a PromptPay QR payment order. **LINE linking is optional** — `businesses.line_user_id` may be `null`; the order then stores `payment_orders.line_user_id = null` (`is_line_link = false`) and is matched by amount + datetime only (see §6). When the business is linked, its `line_user_id` is stored on the order. Also requires an `ACTIVE` paid-through subscription; otherwise `403` (`PAST_DUE`/no package) or `429` (quota exhausted / hourly rate limit exceeded). **Optional `zero_decimal: true`** (`CreateQrDto`, `@IsBoolean`, default `false`): creates a QR with a whole-baht total (`.00`, e.g. `99.00`) instead of allocating a decimal reference — `amount` must then be a whole number (otherwise `400 BadRequestException`) and a duplicate request for the same `base_amount` made **within the last 60 seconds** is rejected with `409 Conflict` and a Thai message telling the caller to wait 1 minute or use decimal mode (`zero_decimal: false`) instead. If the JWT contains `api_key_id`, the key must still be active/not deleted and belong to the business, `payment_orders.api_key_id` is set, an `api_key_usage_logs` row with `action = 'QR_CREATED'`, `quota_deducted = false` is written, and `api_keys.last_used_at` is updated.
   - `GET /orders/:id` (`business`, `admin`): Returns order details including `line_user_id` and `is_line_link` (`business` users must have a valid `businessId` matching `order.business_id`, otherwise `404`).
-- **LINE Linking Flow**:
+- **LINE Linking Flow (optional)**:
+  - A business may create QRs **without** linking LINE; those orders are matched by amount + datetime only (see §6). Linking is only needed if the business wants orders matched to a specific LINE User ID and to use the `line.linked` callback.
   - An unlinked business calls `POST /line/link-qr` and pays the generated QR (0.01–0.99) with the KBank account whose LINE notifications are forwarded to APay. Passing `redirect_url` in the body makes the backend POST a `line.linked` callback (5s timeout) after the binding succeeds — the backoffice uses it to relay the result to the browser over SSE; polling remains the fallback.
   - When the KBank webhook arrives with a matching amount + time (`lookup_key`) and `source.userId` (required), the system binds `businesses.line_user_id = source.userId` and `payment_orders.line_user_id` to that order. If the LINE User ID is already bound to another business (or the business is already linked), the webhook is logged as `NO_MATCH` and no binding happens.
   - Verification orders are marked `PAID` but **skip quota deduction** and the `QR_PAID` usage log (they are identity verification, not revenue).
@@ -164,21 +165,39 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
     - `order.lookup_key`: `YYYYMMDD_<total_amount.toFixed(2)>`
   - Generates EMVCo PromptPay payload via `promptpay-qr` using `business.promptpay_id` and `total_amount`, plus a Base64 PNG Data URL via `qrcode`.
 
-### 6. KBank LINE Webhook & Matching (`src/webhook/`)
-- **Endpoint**: `POST /api/v1/webhooks/kbank/line`
+### 6. KBank Webhooks & Matching (`src/webhook/`)
+
+**Endpoints**
+- `POST /api/v1/webhooks/kbank/line` — LINE Messaging API webhook (has `source.userId`).
+- `POST /api/v1/webhooks/kbank/ios-notify` — แจ้งเตือนเงินเข้าจากแอป KBank (K PLUS) ที่ iOS Shortcut ส่งต่อมา (ไม่มี LINE User ID)
+  - Body: `{ app: 'K_PLUS', title: 'รายการเงินเข้า', body: 'บัญชี xxx-x-x8583-x  จำนวนเงิน 1.00 บาท  วันที่ 1 พ.ย. 69  22:57 น.' }` (`KbankIosNotificationBody`, optional `timestamp` ใช้เป็น fallback เมื่อไม่มีวันเวลาในข้อความ)
+  - ถ้าตั้ง Env `KBANK_IOS_WEBHOOK_SECRET` ต้องส่ง Header `x-webhook-secret` ให้ตรง (ไม่ตรง → `401 Unauthorized`); ถ้าไม่ตั้งจะเปิดให้เรียกได้ (dev)
+  - ไม่มี message id จากต้นทาง → สร้าง `webhook_logs.line_message_id = ios-<uuid>` และตอบ `{ processed: 1, matched, order_id }`
+  - **จับคู่ได้เฉพาะ Order รับเงินปกติ** — Order ผูก LINE (`is_line_link = true`) ต้องใช้ `source.userId` จาก LINE เท่านั้น จึงข้ามในเส้นทางนี้
+  - **Idempotency**: อาศัยสถานะ Order (จับคู่ได้เฉพาะ `UNVERIFIED`) — ยิงซ้ำจะกลายเป็น `NO_MATCH` และไม่หักโควต้าซ้ำ
+
+**LINE endpoint details**
 - **Signature Verification**: Checks `x-line-signature` (HMAC-SHA256 of `request.rawBody` with `LINE_CHANNEL_SECRET`) only when `VERIFY_LINE_SIGNATURE=true`.
 - **Idempotency**: Ignores non-text events and deduplicates by checking `webhook_logs.line_message_id`.
 - **LINE User ID is required**: Each event's `source.userId` (`lineUserId`) is mandatory for processing. An event without `source.userId` is logged as `NO_MATCH` and is never matched against an order.
-- **KBank Text Parser (`src/webhook/utils/kbank-message.parser.ts`)**:
-  - Extracts 2-decimal transfer amount from Thai KBank LINE notifications (keywords: `จำนวนเงิน`, `จำนวน`, `เงินเข้า`, `รับโอนเงิน`, `รับโอน`, `รับเงิน`, `โอนเข้า`).
-  - Parses `DD/MM/YY(YY)` and `HH:mm` in `Asia/Bangkok` time, converting 2-digit or 4-digit Thai Buddhist Era (พ.ศ.) years to CE (`convertBuddhistYearToCE`), falling back to the LINE event timestamp if no date is in the text.
-- **Order Matching, Quota Deduction & Callback (`WebhookService`)**:
-  - Builds `lookupKey = "${parsed.dateStr}_${parsed.amount}"` and, inside a transaction with `pessimistic_write` lock, first queries `payment_orders` where `lookup_key = :lookupKey` **AND `line_user_id = :lineUserId`** (the LINE User ID from the event), `status = 'UNVERIFIED'`, and `expires_at >= :transferTime` (ordered by `created_at DESC`).
-  - If no normal order matches, it tries the **LINE linking** match: a `payment_orders` row with `is_line_link = true`, `line_user_id IS NULL`, matching `lookup_key`/time, and whose `businesses.line_user_id IS NULL`. On match it sets `businesses.line_user_id = lineUserId` and `payment_orders.line_user_id = lineUserId`. If that LINE User ID is already linked to another business, the match is rejected (unique index protects races).
-  - Logs result in `webhook_logs` with `process_status` (`MATCHED` or `NO_MATCH`).
-  - On a normal match, marks order `PAID` (`paid_at = now`) and calls `subscriptions.deductQuotaOnPaid()` in the same transaction (quota is deducted only when **QR created + payment succeeded** and the subscription is still `ACTIVE` with remaining quota). LINE-linking orders are marked `PAID` without deducting quota.
-  - If `order.api_key_id` is set, writes `api_key_usage_logs` (`action = 'QR_PAID'`, `quota_deducted` = result of the deduction). Orders created without an API key still deduct quota but skip the log.
-  - Sends an HTTP `POST` callback (5s timeout) to `order.redirect_url` (when present), recording `callback_sent` and `callback_status_code` on the order. `event` is `payment.paid` for normal orders and `line.linked` for `is_line_link = true` orders; the payload also carries `is_line_link` so receivers can branch.
+
+**Parsers**
+- `src/webhook/utils/kbank-message.parser.ts` (ใช้ร่วมกันทั้ง 2 endpoint):
+  - Extracts 2-decimal transfer amount from Thai KBank notifications (keywords: `จำนวนเงิน`, `จำนวน`, `เงินเข้า`, `รับโอนเงิน`, `รับโอน`, `รับเงิน`, `โอนเข้า`).
+  - Parses `DD/MM/YY(YY)` **หรือ** ชื่อเดือนไทย `D <เดือน> YY(YY)` (เช่น `1 พ.ย. 69`, รองรับชื่อเต็ม/ย่อ และมี/ไม่มีจุด) พร้อม `HH:mm` ใน `Asia/Bangkok`, converting 2-digit or 4-digit Thai Buddhist Era (พ.ศ.) years to CE (`convertBuddhistYearToCE`), falling back to the event/payload timestamp if no date is in the text.
+- `src/webhook/utils/kbank-ios-notification.parser.ts`: รวม `title` + `body` แล้วส่งต่อให้ `parseKBankMessage`; คืน `null` เมื่อไม่มี `body`, เป็นแจ้งเตือนเงินออก (`เงินออก`/`โอนออก`/`ถอนเงิน`/`จ่ายบิล`/`ชำระบิล`) หรือไม่พบยอดเงิน
+
+**Order Matching, Quota Deduction & Callback (`WebhookService`)**
+- ทุกเส้นทางใช้ `lookupKey = "${parsed.dateStr}_${parsed.amount}"` และค้นหาใน transaction ด้วย `pessimistic_write` lock เฉพาะ `status = 'UNVERIFIED'` + `expires_at >= :transferTime` + `is_line_link = false` (`findUnverifiedOrder`), เรียง `created_at DESC`
+- **LINE path** (`matchAndMarkPaid`) จับคู่ตามลำดับ:
+  1. Order ที่มี `line_user_id = :lineUserId` (ธุรกิจผูก LINE แล้ว)
+  2. **LINE linking** order: `is_line_link = true`, `line_user_id IS NULL`, `businesses.line_user_id IS NULL` → ผูก `businesses.line_user_id = lineUserId` และ `payment_orders.line_user_id = lineUserId` (ถ้า LINE User ID ถูกผูกกับธุรกิจอื่นแล้วจะไม่ผูก — unique index กัน race)
+  3. Order ที่สร้างตอนธุรกิจยังไม่ผูก LINE (`line_user_id IS NULL`) → จับคู่ด้วยยอด + เวลา
+- **iOS path** (`matchAndMarkPaidByAmountAndTime`): จับคู่ด้วยยอด + เวลาล้วน ๆ (ไม่มีตัวกรอง `line_user_id`)
+- ผลลัพธ์บันทึกใน `webhook_logs` (`MATCHED` / `NO_MATCH`) ผ่าน `finalizeMatchedOrder` ที่ใช้ร่วมกันทั้ง 2 path
+- On a normal match, marks order `PAID` (`paid_at = now`) and calls `subscriptions.deductQuotaOnPaid()` in the same transaction (quota is deducted only when **QR created + payment succeeded** and the subscription is still `ACTIVE` with remaining quota). LINE-linking orders are marked `PAID` without deducting quota.
+- If `order.api_key_id` is set, writes `api_key_usage_logs` (`action = 'QR_PAID'`, `quota_deducted` = result of the deduction). Orders created without an API key still deduct quota but skip the log.
+- Sends an HTTP `POST` callback (5s timeout) to `order.redirect_url` (when present), recording `callback_sent` and `callback_status_code` on the order. `event` is `payment.paid` for normal orders and `line.linked` for `is_line_link = true` orders; the payload also carries `is_line_link` so receivers can branch.
 
 ### 7. Dashboard Analytics (`src/dashboard/`)
 - **Read-only Analytics APIs** for Frontend KPI cards and charts (`Asia/Bangkok` / `UTC+7` timezone). Guarded by `@UseGuards(JwtAuthGuard, RoleGuard)`. Any module using `RoleGuard` (`PackagesModule`, `SubscriptionsModule`, `ApiKeysModule`, `PaymentModule`, `DashboardModule`) imports `UsersModule` so `RoleGuard` can resolve `UsersService` without circular dependencies.
@@ -222,6 +241,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - `JWT_SECRET` / `JWT_REFRESH_SECRET`: Secrets for access and refresh tokens (`JWT_EXPIRES_IN` defaults to `15m`, `JWT_REFRESH_EXPIRES_IN` defaults to `7d`).
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD`: Used by `DatabaseSeederService` to seed the initial `admin` user and by `pnpm create:admin` (`scripts/create-admin.mts`) to create/update an admin user on demand.
 - `VERIFY_LINE_SIGNATURE`: Set to `'true'` to enforce `x-line-signature` verification using `LINE_CHANNEL_SECRET`.
+- `KBANK_IOS_WEBHOOK_SECRET`: Shared secret for `POST /api/v1/webhooks/kbank/ios-notify` (Header `x-webhook-secret`). If unset/blank the endpoint accepts any caller (dev only) — set it in production.
 - `CORS_ORIGINS`: Comma-separated list of browser origins allowed to call the API (e.g. `http://localhost:3001,https://app.apay.com`). Defaults to `*` (any origin; forces `credentials: false`). Set a specific list to restrict origins.
 - `CORS_ALLOW_ALL`: Set to `'true'` as an alternative to `CORS_ORIGINS=*`.
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `SMTP_FROM_NAME`: SMTP credentials for sending self-registration OTP emails (`src/mail/mail.service.ts`). `SMTP_PORT` defaults to `587`, `SMTP_SECURE` (`'true'`) defaults to off but is forced on when the port is `465`, and `SMTP_FROM` falls back to `SMTP_USER`. If `SMTP_HOST` or the from address is missing, `POST /auth/register-business/request-otp` returns `503` ("Email service is not configured").

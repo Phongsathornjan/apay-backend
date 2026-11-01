@@ -26,6 +26,49 @@ const DATE_REGEX = /(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/;
 
 const TIME_REGEX = /(\d{1,2}):(\d{2})/;
 
+/**
+ * ชื่อเดือนไทยแบบเต็ม/ย่อ ใช้แปลง "1 พ.ย. 69" (รูปแบบแจ้งเตือนของแอป KBank)
+ * เป็นเลขเดือน — จุดในชื่อย่อเป็น optional จึงรองรับทั้ง "พ.ย." และ "พย"
+ */
+const THAI_MONTH_ALIASES: Array<[string, number]> = [
+  ['มกราคม', 1],
+  ['ม.ค.', 1],
+  ['กุมภาพันธ์', 2],
+  ['ก.พ.', 2],
+  ['มีนาคม', 3],
+  ['มี.ค.', 3],
+  ['เมษายน', 4],
+  ['เม.ย.', 4],
+  ['พฤษภาคม', 5],
+  ['พ.ค.', 5],
+  ['มิถุนายน', 6],
+  ['มิ.ย.', 6],
+  ['กรกฎาคม', 7],
+  ['ก.ค.', 7],
+  ['สิงหาคม', 8],
+  ['ส.ค.', 8],
+  ['กันยายน', 9],
+  ['ก.ย.', 9],
+  ['ตุลาคม', 10],
+  ['ต.ค.', 10],
+  ['พฤศจิกายน', 11],
+  ['พ.ย.', 11],
+  ['ธันวาคม', 12],
+  ['ธ.ค.', 12],
+];
+
+const THAI_MONTH_LOOKUP = new Map<string, number>(
+  THAI_MONTH_ALIASES.map(([name, month]) => [name.replace(/\./g, ''), month]),
+);
+
+const THAI_MONTH_PATTERN = THAI_MONTH_ALIASES.map(([name]) =>
+  name.replace(/\./g, '\\.?'),
+).join('|');
+
+const THAI_DATE_REGEX = new RegExp(
+  `(\\d{1,2})\\s*(${THAI_MONTH_PATTERN})\\s*(\\d{2,4})`,
+);
+
 function extractAmount(text: string): string | null {
   const keywordMatch = AMOUNT_KEYWORD_REGEX.exec(text);
   let rawAmount = keywordMatch?.[1];
@@ -58,16 +101,17 @@ function extractDateTime(
   text: string,
   fallbackTimestamp?: number,
 ): { dateStr: string; transferTime: Date } {
-  const dateMatch = DATE_REGEX.exec(text);
   const timeMatch = TIME_REGEX.exec(text);
+  const hour = timeMatch ? Number(timeMatch[1]) : 0;
+  const minute = timeMatch ? Number(timeMatch[2]) : 0;
+
+  // รูปแบบที่ 1: "18/10/69" (แจ้งเตือนผ่าน LINE OA)
+  const dateMatch = DATE_REGEX.exec(text);
 
   if (dateMatch) {
     const day = Number(dateMatch[1]);
     const month = Number(dateMatch[2]);
     const year = convertBuddhistYearToCE(Number(dateMatch[3]));
-    const hour = timeMatch ? Number(timeMatch[1]) : 0;
-    const minute = timeMatch ? Number(timeMatch[2]) : 0;
-
     const transferTime = bangkokDateTimeToUtc(year, month, day, hour, minute);
 
     if (!Number.isNaN(transferTime.getTime())) {
@@ -75,6 +119,26 @@ function extractDateTime(
         dateStr: getBangkokParts(transferTime).dateStr,
         transferTime,
       };
+    }
+  }
+
+  // รูปแบบที่ 2: "1 พ.ย. 69" (แจ้งเตือนจากแอป KBank ที่ส่งผ่าน iOS Shortcut)
+  const thaiDateMatch = THAI_DATE_REGEX.exec(text);
+
+  if (thaiDateMatch) {
+    const day = Number(thaiDateMatch[1]);
+    const month = THAI_MONTH_LOOKUP.get(thaiDateMatch[2].replace(/\./g, ''));
+    const year = convertBuddhistYearToCE(Number(thaiDateMatch[3]));
+
+    if (month) {
+      const transferTime = bangkokDateTimeToUtc(year, month, day, hour, minute);
+
+      if (!Number.isNaN(transferTime.getTime())) {
+        return {
+          dateStr: getBangkokParts(transferTime).dateStr,
+          transferTime,
+        };
+      }
     }
   }
 
@@ -88,7 +152,8 @@ function extractDateTime(
 }
 
 /**
- * แกะยอดเงิน วันเวลา โอนจากข้อความแจ้งเตือน KBank ที่ส่งมาทาง LINE OA
+ * แกะยอดเงิน วันเวลา โอนจากข้อความแจ้งเตือน KBank (ทั้งที่ส่งมาทาง LINE OA
+ * และที่ส่งต่อมาจากแอป KBank ผ่าน iOS Shortcut)
  * คืนค่า null หากไม่พบยอดเงินทศนิยม 2 ตำแหน่งในข้อความ
  */
 export function parseKBankMessage(
