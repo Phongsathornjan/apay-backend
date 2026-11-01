@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import { Request } from 'express';
+import type { KbankIosNotificationBody } from './types/kbank-ios-notification.type';
 import type { LineWebhookBody } from './types/line-webhook.type';
 import { WebhookService } from './webhook.service';
 
@@ -37,5 +38,26 @@ export class WebhookController {
     }
 
     return this.webhookService.handleWebhook(body);
+  }
+
+  /**
+   * รับแจ้งเตือนเงินเข้าจากแอป KBank (K PLUS) ที่ส่งต่อผ่าน iOS Shortcut
+   * Body: `{ app: 'K_PLUS', title: 'รายการเงินเข้า', body: '...' }`
+   *
+   * ถ้าตั้ง Env `KBANK_IOS_WEBHOOK_SECRET` ต้องส่ง Header `x-webhook-secret` ให้ตรงด้วย
+   */
+  @Post('kbank/ios-notify')
+  @HttpCode(HttpStatus.OK)
+  handleKbankIosNotification(
+    @Body() body: KbankIosNotificationBody,
+    @Headers('x-webhook-secret') secret?: string,
+  ) {
+    const isValid = this.webhookService.verifyIosNotificationSecret(secret);
+
+    if (!isValid) {
+      throw new UnauthorizedException('Invalid webhook secret');
+    }
+
+    return this.webhookService.handleIosNotification(body);
   }
 }

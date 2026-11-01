@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -50,13 +49,8 @@ export class PaymentService {
   async createQrOrder(user: AuthUser, dto: CreateQrDto) {
     const business = await this.resolveActiveBusiness(user);
 
-    // ต้องผูก LINE User ID ก่อน จึงจะสร้าง QR รับเงินได้
-    if (!business.line_user_id) {
-      throw new ForbiddenException(
-        'Business is not linked to a LINE user yet; please link LINE before creating a QR',
-      );
-    }
-
+    // ไม่บังคับผูก LINE แล้ว: Order ที่ยังไม่มี line_user_id จะถูกจับคู่
+    // ด้วยยอดเงิน + วันเวลาจาก Webhook (LINE หรือ iOS Notification) แทน
     return this.createOrder(business, dto, user.apiKeyId ?? null);
   }
 

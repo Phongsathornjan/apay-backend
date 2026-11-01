@@ -307,7 +307,7 @@ describe('PaymentService', () => {
     expect(apiKeysRepository.update).not.toHaveBeenCalled();
   });
 
-  it('rejects QR creation when the business has not linked a LINE user yet', async () => {
+  it('creates a QR even when the business has not linked a LINE user yet', async () => {
     businessService.findById.mockResolvedValue({
       id: 'business-1',
       is_active: true,
@@ -315,10 +315,20 @@ describe('PaymentService', () => {
       line_user_id: null,
     });
 
-    await expect(service.createQrOrder(user, dto)).rejects.toBeInstanceOf(
-      ForbiddenException,
+    const result = await service.createQrOrder(user, dto);
+
+    expect(result).toMatchObject({
+      status: 'UNVERIFIED',
+      line_user_id: null,
+      is_line_link: false,
+    });
+    expect(ordersRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_user_id: null,
+        is_line_link: false,
+        status: 'UNVERIFIED',
+      }),
     );
-    expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
   describe('createLineLinkOrder', () => {

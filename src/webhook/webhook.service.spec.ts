@@ -255,6 +255,31 @@ describe('WebhookService', () => {
       );
     });
 
+    it('falls back to orders created before the business linked a LINE user', async () => {
+      const order = buildOrder({ line_user_id: null });
+      queryBuilder.getOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(order);
+      subscriptionsService.deductQuotaOnPaid.mockResolvedValue(true);
+
+      const result = await (service as any).matchAndMarkPaid(
+        parsed,
+        'U-owner',
+        'message-1',
+        {},
+      );
+
+      expect(result).toBe(order);
+      expect(order.status).toBe('PAID');
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'order.line_user_id IS NULL',
+      );
+      expect(webhookLogsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ process_status: 'MATCHED' }),
+      );
+    });
+
     it('does not bind a LINE user that is already linked to another business', async () => {
       queryBuilder.getOne.mockResolvedValue(null);
       businessRepository.findOne.mockResolvedValueOnce({
@@ -274,6 +299,147 @@ describe('WebhookService', () => {
       expect(webhookLogsRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ process_status: 'NO_MATCH' }),
       );
+    });
+  });
+
+  describe('handleIosNotification', () => {
+    const iosPayload = {
+      app: 'K_PLUS',
+      title: 'รายการเงินเข้า',
+      body: 'บัญชี xxx-x-x8583-x  จำนวนเงิน 1.00 บาท  วันที่ 1 พ.ย. 69  22:57 น.',
+    };
+
+    const buildIosOrder = (overrides: Partial<PaymentOrder> = {}) =>
+      buildOrder({
+        id: '20261101_1.00',
+        lookup_key: '20261101_1.00',
+        line_user_id: null,
+        base_amount: 1,
+        decimal_ref: 0,
+        total_amount: 1,
+        redirect_url: null,
+        ...overrides,
+      });
+
+    it('matches a normal order by amount and datetime without a LINE user id', async () => {
+      const order = buildIosOrder();
+      queryBuilder.getOne.mockResolvedValue(order);
+      subscriptionsService.deductQuotaOnPaid.mockResolvedValue(true);
+
+      const result = await service.handleIosNotification(iosPayload);
+
+      expect(result).toEqual({
+        processed: 1,
+        matched: true,
+        order_id: '20261101_1.00',
+      });
+      expect(queryBuilder.where).toHaveBeenCalledWith(
+        'order.lookup_key = :lookupKey',
+        { lookupKey: '20261101_1.00' },
+      );
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+        'order.is_line_link = :isLineLink',
+        { isLineLink: false },
+      );
+      expect(queryBuilder.andWhere).not.toHaveBeenCalledWith(
+        'order.line_user_id = :lineUserId',
+        expect.anything(),
+      );
+      expect(order.status).toBe('PAID');
+      expect(
+        subscriptionsService.deductQuotaOnPaid,
+      ).toHaveBeenCalledWith(order, manager);
+      expect(webhookLogsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          process_status: 'MATCHED',
+          matched_order_id: '20261101_1.00',
+          parsed_amount: 1,
+          parsed_datetime: '20261101 22:57',
+        }),
+      );
+    });
+
+    it('records NO_MATCH when the notification body cannot be parsed', async () => {
+      const result = await service.handleIosNotification({
+        app: 'K_PLUS',
+        title: 'รายการเงินเข้า',
+        body: 'ไม่มียอดเงิน',
+      });
+
+      expect(result).toEqual({
+        processed: 1,
+        matched: false,
+        order_id: null,
+      });
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(webhookLogsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          line_message_id: expect.stringMatching(/^ios-/),
+          process_status: 'NO_MATCH',
+        }),
+      );
+    });
+
+    it('records NO_MATCH when no order matches the amount and time', async () => {
+      queryBuilder.getOne.mockResolvedValue(null);
+
+      const result = await service.handleIosNotification(iosPayload);
+
+      expect(result).toEqual({
+        processed: 1,
+        matched: false,
+        order_id: null,
+      });
+      expect(subscriptionsService.deductQuotaOnPaid).not.toHaveBeenCalled();
+      expect(webhookLogsRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          process_status: 'NO_MATCH',
+          matched_order_id: null,
+          parsed_amount: 1,
+        }),
+      );
+    });
+
+    it('sends a payment.paid callback when the matched order has a redirect_url', async () => {
+      const order = buildIosOrder({
+        redirect_url: 'https://merchant.example.com/cb',
+      });
+      queryBuilder.getOne.mockResolvedValue(order);
+      subscriptionsService.deductQuotaOnPaid.mockResolvedValue(true);
+      httpService.post.mockReturnValue(of({ status: 200 }));
+
+      await service.handleIosNotification(iosPayload);
+
+      expect(httpService.post).toHaveBeenCalledWith(
+        'https://merchant.example.com/cb',
+        expect.objectContaining({
+          event: 'payment.paid',
+          order_id: '20261101_1.00',
+        }),
+        { timeout: 5000 },
+      );
+      expect(ordersRepository.update).toHaveBeenCalledWith(
+        { id: '20261101_1.00' },
+        { callback_sent: true, callback_status_code: 200 },
+      );
+    });
+  });
+
+  describe('verifyIosNotificationSecret', () => {
+    it('accepts any request when the secret is not configured', () => {
+      configService.get.mockReturnValue(undefined);
+
+      expect(service.verifyIosNotificationSecret()).toBe(true);
+    });
+
+    it('requires a matching x-webhook-secret when configured', () => {
+      configService.get.mockImplementation((key: string) =>
+        key === 'KBANK_IOS_WEBHOOK_SECRET' ? 'ios-secret' : undefined,
+      );
+
+      expect(service.verifyIosNotificationSecret('ios-secret')).toBe(true);
+      expect(service.verifyIosNotificationSecret('wrong')).toBe(false);
+      expect(service.verifyIosNotificationSecret()).toBe(false);
     });
   });
 

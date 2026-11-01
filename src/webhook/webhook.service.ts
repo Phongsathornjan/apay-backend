@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { AxiosError } from 'axios';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { firstValueFrom } from 'rxjs';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { ApiKeyUsageLog } from '../api-keys/entities/api-key-usage-log.entity';
@@ -17,10 +17,12 @@ import {
 import { PaymentOrder } from '../payment/entities/payment-order.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { WebhookLog } from './entities/webhook-log.entity';
+import type { KbankIosNotificationBody } from './types/kbank-ios-notification.type';
 import {
   LineWebhookBody,
   LineWebhookEvent,
 } from './types/line-webhook.type';
+import { parseKbankIosNotification } from './utils/kbank-ios-notification.parser';
 import {
   ParsedKBankMessage,
   parseKBankMessage,
@@ -42,6 +44,15 @@ interface CallbackPayload {
   status: string;
   paid_at: Date | null;
   is_line_link: boolean;
+}
+
+export interface IosNotificationResult {
+  /** จำนวน payload ที่ถูกประมวลผล (1 รายการต่อ 1 request) */
+  processed: number;
+  /** `true` เมื่อจับคู่ Order และปิดยอดเป็น PAID สำเร็จ */
+  matched: boolean;
+  /** Order ที่ถูกจับคู่ (null เมื่อไม่พบ) */
+  order_id: string | null;
 }
 
 @Injectable()
@@ -113,6 +124,72 @@ export class WebhookService {
     return { processed };
   }
 
+  /**
+   * ตรวจสอบ shared secret ของ endpoint `/kbank/ios-notify` (Header `x-webhook-secret`)
+   * - ถ้าไม่ได้ตั้ง Env `KBANK_IOS_WEBHOOK_SECRET` → เปิดให้เรียกได้ (ใช้ตอน dev)
+   * - ถ้าตั้งไว้ → ต้องส่ง Header ให้ตรงเท่านั้น
+   */
+  verifyIosNotificationSecret(secret?: string): boolean {
+    const expected = this.configService.get<string>('KBANK_IOS_WEBHOOK_SECRET');
+
+    if (!expected) {
+      return true;
+    }
+
+    if (!secret) {
+      return false;
+    }
+
+    return safeCompare(secret, expected);
+  }
+
+  /**
+   * รับแจ้งเตือนเงินเข้าจากแอป KBank ที่ iOS Shortcut ส่งต่อมา
+   * (`{ app, title, body }`) แล้วจับคู่กับ Order ด้วยยอดเงิน + วันเวลา
+   *
+   * ต่างจาก Webhook ของ LINE ตรงที่ไม่มี `source.userId` จึงไม่สามารถผูก
+   * LINE User ID (`line.linked`) ได้ — จับคู่ได้เฉพาะ Order รับเงินปกติ
+   *
+   * Idempotency: ใช้สถานะ Order เป็นตัวกันซ้ำ (จับคู่ได้เฉพาะ `UNVERIFIED`)
+   * ดังนั้นการยิงซ้ำจะกลายเป็น `NO_MATCH` และไม่หักโควต้าซ้ำ
+   */
+  async handleIosNotification(
+    payload: KbankIosNotificationBody,
+  ): Promise<IosNotificationResult> {
+    // ไม่มี message id จากต้นทาง → สร้างขึ้นใหม่เพื่อให้บันทึกลง webhook_logs ได้
+    const messageId = `ios-${randomUUID()}`;
+    const rawPayload = (payload ?? {}) as unknown as Record<string, unknown>;
+    const parsed = parseKbankIosNotification(payload);
+
+    if (!parsed) {
+      await this.saveLog({
+        line_message_id: messageId,
+        parsed_amount: null,
+        parsed_datetime: null,
+        raw_payload: rawPayload,
+        process_status: WebhookProcessStatusEnum.NO_MATCH,
+      });
+
+      return { processed: 1, matched: false, order_id: null };
+    }
+
+    const order = await this.matchAndMarkPaidByAmountAndTime(
+      parsed,
+      messageId,
+      rawPayload,
+    );
+
+    if (order?.redirect_url) {
+      await this.sendCallback(order);
+    }
+
+    return {
+      processed: 1,
+      matched: order !== null,
+      order_id: order?.id ?? null,
+    };
+  }
+
   private async processEvent(
     event: LineWebhookEvent,
     lineUserId?: string,
@@ -146,6 +223,14 @@ export class WebhookService {
     }
   }
 
+  /**
+   * จับคู่ Order จาก Webhook ของ LINE (`source.userId` ใช้ได้)
+   *
+   * ลำดับการจับคู่:
+   * 1. Order ที่สร้างตอนธุรกิจผูก LINE แล้ว → ต้องมี `line_user_id` ตรงกับผู้โอน
+   * 2. Order สำหรับผูก LINE (`is_line_link = true`) → ผูก `businesses.line_user_id`
+   * 3. Order ที่สร้างตอนธุรกิจยังไม่ผูก LINE (`line_user_id IS NULL`) → จับคู่ด้วยยอด + เวลา
+   */
   private async matchAndMarkPaid(
     parsed: ParsedKBankMessage,
     lineUserId: string,
@@ -155,22 +240,13 @@ export class WebhookService {
     const lookupKey = `${parsed.dateStr}_${parsed.amount}`;
 
     return this.dataSource.transaction(async (manager) => {
-      const ordersRepository = manager.getRepository(PaymentOrder);
-
       // 1) จับคู่ Order รับเงินปกติ ด้วย lookupKey + lineUserId (หลังผูก LINE แล้ว)
-      let order = await ordersRepository
-        .createQueryBuilder('order')
-        .setLock('pessimistic_write')
-        .where('order.lookup_key = :lookupKey', { lookupKey })
-        .andWhere('order.line_user_id = :lineUserId', { lineUserId })
-        .andWhere('order.status = :status', {
-          status: PaymentOrderStatusEnum.UNVERIFIED,
-        })
-        .andWhere('order.expires_at >= :transferTime', {
-          transferTime: parsed.transferTime,
-        })
-        .orderBy('order.created_at', 'DESC')
-        .getOne();
+      let order = await this.findUnverifiedOrder(
+        manager,
+        lookupKey,
+        parsed.transferTime,
+        { lineUserId },
+      );
 
       // 2) ยังไม่เคยผูก LINE → จับคู่ Order ผูก LINE (ยอด/เวลาตรงกัน) แล้วผูก Business
       if (!order) {
@@ -182,65 +258,161 @@ export class WebhookService {
         );
       }
 
-      const webhookLogsRepository = manager.getRepository(WebhookLog);
-
+      // 3) Order ที่สร้างไว้ก่อนธุรกิจผูก LINE (line_user_id = null)
       if (!order) {
-        await webhookLogsRepository.save(
-          webhookLogsRepository.create({
-            line_message_id: messageId,
-            matched_order_id: null,
-            parsed_amount: Number(parsed.amount),
-            parsed_datetime: parsed.datetimeStr,
-            raw_payload: rawPayload,
-            process_status: WebhookProcessStatusEnum.NO_MATCH,
-          }),
-        );
-
-        return null;
-      }
-
-      order.status = PaymentOrderStatusEnum.PAID;
-      order.paid_at = new Date();
-      await ordersRepository.save(order);
-
-      // QR ผูก LINE เป็นการยืนยันตัวตน ไม่หักโควต้า
-      let quotaDeducted = false;
-
-      if (!order.is_line_link) {
-        // ครบเงื่อนไข "สร้าง QR + จ่ายเงินสำเร็จ" → หักโควต้า 1 ครั้ง
-        quotaDeducted = await this.subscriptionsService.deductQuotaOnPaid(
-          order,
+        order = await this.findUnverifiedOrder(
           manager,
+          lookupKey,
+          parsed.transferTime,
+          { onlyWithoutLineUser: true },
         );
       }
 
-      if (order.api_key_id) {
-        const usageLogsRepository = manager.getRepository(ApiKeyUsageLog);
+      return this.finalizeMatchedOrder(
+        manager,
+        order,
+        parsed,
+        messageId,
+        rawPayload,
+      );
+    });
+  }
 
-        await usageLogsRepository.save(
-          usageLogsRepository.create({
-            api_key_id: order.api_key_id,
-            business_id: order.business_id,
-            payment_order_id: order.id,
-            action: ApiKeyUsageActionEnum.QR_PAID,
-            quota_deducted: quotaDeducted,
-          }),
-        );
-      }
+  /**
+   * จับคู่ Order ด้วยยอดเงิน + วันเวลาเท่านั้น (ไม่มี LINE User ID)
+   * ใช้กับแจ้งเตือนที่ส่งผ่าน iOS Shortcut — จับคู่ได้เฉพาะ Order รับเงินปกติ
+   * เพราะ Order ผูก LINE ต้องใช้ `source.userId` จาก LINE เท่านั้น
+   */
+  private async matchAndMarkPaidByAmountAndTime(
+    parsed: ParsedKBankMessage,
+    messageId: string,
+    rawPayload: Record<string, unknown>,
+  ): Promise<PaymentOrder | null> {
+    const lookupKey = `${parsed.dateStr}_${parsed.amount}`;
 
+    return this.dataSource.transaction(async (manager) => {
+      const order = await this.findUnverifiedOrder(
+        manager,
+        lookupKey,
+        parsed.transferTime,
+      );
+
+      return this.finalizeMatchedOrder(
+        manager,
+        order,
+        parsed,
+        messageId,
+        rawPayload,
+      );
+    });
+  }
+
+  /**
+   * ค้นหา Order รับเงินปกติ (`is_line_link = false`) ที่ยังไม่หมดอายุ
+   * - `lineUserId` → จำกัดเฉพาะ Order ของ LINE User นั้น
+   * - `onlyWithoutLineUser` → เฉพาะ Order ที่สร้างตอนยังไม่ผูก LINE
+   * - ไม่ส่งทั้งคู่ → จับคู่ด้วยยอด + เวลาล้วน ๆ (ใช้กับ iOS Notification)
+   */
+  private async findUnverifiedOrder(
+    manager: EntityManager,
+    lookupKey: string,
+    transferTime: Date,
+    options: { lineUserId?: string; onlyWithoutLineUser?: boolean } = {},
+  ): Promise<PaymentOrder | null> {
+    const query = manager
+      .getRepository(PaymentOrder)
+      .createQueryBuilder('order')
+      .setLock('pessimistic_write')
+      .where('order.lookup_key = :lookupKey', { lookupKey })
+      .andWhere('order.is_line_link = :isLineLink', { isLineLink: false })
+      .andWhere('order.status = :status', {
+        status: PaymentOrderStatusEnum.UNVERIFIED,
+      })
+      .andWhere('order.expires_at >= :transferTime', { transferTime })
+      .orderBy('order.created_at', 'DESC');
+
+    if (options.onlyWithoutLineUser) {
+      query.andWhere('order.line_user_id IS NULL');
+    } else if (options.lineUserId) {
+      query.andWhere('order.line_user_id = :lineUserId', {
+        lineUserId: options.lineUserId,
+      });
+    }
+
+    return query.getOne();
+  }
+
+  /**
+   * ปิดยอด Order ที่จับคู่ได้ (PAID + หักโควต้า + usage log) และบันทึก `webhook_logs`
+   * ใช้ร่วมกันทั้ง Webhook ของ LINE และ iOS Notification
+   */
+  private async finalizeMatchedOrder(
+    manager: EntityManager,
+    order: PaymentOrder | null,
+    parsed: ParsedKBankMessage,
+    messageId: string,
+    rawPayload: Record<string, unknown>,
+  ): Promise<PaymentOrder | null> {
+    const webhookLogsRepository = manager.getRepository(WebhookLog);
+
+    if (!order) {
       await webhookLogsRepository.save(
         webhookLogsRepository.create({
           line_message_id: messageId,
-          matched_order_id: order.id,
+          matched_order_id: null,
           parsed_amount: Number(parsed.amount),
           parsed_datetime: parsed.datetimeStr,
           raw_payload: rawPayload,
-          process_status: WebhookProcessStatusEnum.MATCHED,
+          process_status: WebhookProcessStatusEnum.NO_MATCH,
         }),
       );
 
-      return order;
-    });
+      return null;
+    }
+
+    const ordersRepository = manager.getRepository(PaymentOrder);
+
+    order.status = PaymentOrderStatusEnum.PAID;
+    order.paid_at = new Date();
+    await ordersRepository.save(order);
+
+    // QR ผูก LINE เป็นการยืนยันตัวตน ไม่หักโควต้า
+    let quotaDeducted = false;
+
+    if (!order.is_line_link) {
+      // ครบเงื่อนไข "สร้าง QR + จ่ายเงินสำเร็จ" → หักโควต้า 1 ครั้ง
+      quotaDeducted = await this.subscriptionsService.deductQuotaOnPaid(
+        order,
+        manager,
+      );
+    }
+
+    if (order.api_key_id) {
+      const usageLogsRepository = manager.getRepository(ApiKeyUsageLog);
+
+      await usageLogsRepository.save(
+        usageLogsRepository.create({
+          api_key_id: order.api_key_id,
+          business_id: order.business_id,
+          payment_order_id: order.id,
+          action: ApiKeyUsageActionEnum.QR_PAID,
+          quota_deducted: quotaDeducted,
+        }),
+      );
+    }
+
+    await webhookLogsRepository.save(
+      webhookLogsRepository.create({
+        line_message_id: messageId,
+        matched_order_id: order.id,
+        parsed_amount: Number(parsed.amount),
+        parsed_datetime: parsed.datetimeStr,
+        raw_payload: rawPayload,
+        process_status: WebhookProcessStatusEnum.MATCHED,
+      }),
+    );
+
+    return order;
   }
 
   /**
