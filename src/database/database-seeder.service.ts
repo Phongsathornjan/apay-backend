@@ -36,27 +36,7 @@ const DEFAULT_PACKAGES: Array<{
     quota_limit: 100,
     rate_limit_per_hour: 60,
     billing_cycle_months: 1,
-  },
-  {
-    code: 'STARTER',
-    name: 'Starter',
-    description: 'แพ็กเกจเริ่มต้นสำหรับร้านค้าขนาดเล็ก',
-    price: 499,
-    max_api_keys: 3,
-    quota_limit: 1000,
-    rate_limit_per_hour: 300,
-    billing_cycle_months: 1,
-  },
-  {
-    code: 'PRO',
-    name: 'Pro',
-    description: 'แพ็กเกจสำหรับร้านค้าที่มีปริมาณธุรกรรมสูง',
-    price: 1499,
-    max_api_keys: 10,
-    quota_limit: 5000,
-    rate_limit_per_hour: 1200,
-    billing_cycle_months: 1,
-  },
+  }
 ];
 
 const BCRYPT_ROUNDS = 10;

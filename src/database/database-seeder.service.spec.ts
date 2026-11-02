@@ -80,7 +80,18 @@ describe('DatabaseSeederService', () => {
     await service.onApplicationBootstrap();
 
     expect(rolesRepository.save).toHaveBeenCalledTimes(2);
-    expect(packagesRepository.save).toHaveBeenCalledTimes(3);
+    expect(packagesRepository.save).toHaveBeenCalledTimes(1);
+    expect(packagesRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'FREE',
+        price: 0,
+        max_api_keys: 1,
+        quota_limit: 100,
+        rate_limit_per_hour: 60,
+        billing_cycle_months: 1,
+        is_active: true,
+      }),
+    );
     expect(usersRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
         username: 'superadmin',
