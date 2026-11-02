@@ -4,6 +4,9 @@ import { DB_SCHEMA } from './database.schema';
 
 /**
  * ตารางทั้งหมดที่ระบบจัดการ (ต้องตรงกับชื่อใน entity)
+ *
+ * `schema_migrations` ไม่มี entity — สร้างโดย `scripts/run-migrations.mts`
+ * แต่ใส่ไว้เพื่อให้ RLS ถูกเปิดด้วยเหมือนตารางอื่น
  */
 const TABLES = [
   'roles',
@@ -17,6 +20,7 @@ const TABLES = [
   'payment_orders',
   'webhook_logs',
   'business_email_otps',
+  'schema_migrations',
 ] as const;
 
 /**
