@@ -1,5 +1,55 @@
 type AnyObject = Record<string, any>;
 
+/**
+ * ค่าที่ใช้แทนความลับทั้งหมด (ไม่เก็บทั้งตัวแรกและตัวท้าย
+ * เพื่อไม่ให้เดาความยาว/รูปแบบของรหัสผ่านหรือ token ได้)
+ */
+export const SECRET_MASK = '***';
+
+/**
+ * คำที่บ่งชี้ว่าคีย์นั้นเก็บ "ความลับ" → ต้องปิดบังค่าทั้งหมด
+ * (เทียบกับคีย์ที่ normalize แล้ว: ตัวพิมพ์เล็ก + ตัด `_`, `-`, ช่องว่าง ออก)
+ *
+ * ครอบคลุม:
+ * - `password`, `new_password`, `password_hash` → password
+ * - `secret`, `client_secret`, `x-webhook-secret` → secret
+ * - `token`, `access_token`, `refresh_token`, `x-refresh-token`, `refresh_token_hash` → token
+ * - `otp`, `otp_hash`, `otp_code` → otp
+ * - `api_key` (ค่าคีย์จริง), `x-api-key` → apikey
+ * - `credential(s)`, `private_key`, `authorization`, `cookie`/`set-cookie`
+ */
+const SECRET_KEY_PATTERN =
+  /(password|passwd|secret|token|otp|apikey|credential|privatekey|authorization|cookie)/;
+
+/**
+ * คีย์ที่ "ดูเหมือนความลับ" แต่จริง ๆ เป็นข้อมูลอ้างอิงที่ต้องอ่านได้ใน log
+ * (ค่าในตาราง normalize แล้ว) — เช่น id ของคีย์, prefix ที่เปิดเผยได้, ชนิดของ token
+ */
+const SAFE_KEYS = new Set([
+  'apikeyid',
+  'apikeyprefix',
+  'tokentype',
+  'tokenexpiresin',
+  'tokenexpiresat',
+]);
+
+/**
+ * คีย์นี้เก็บความลับหรือไม่ (ใช้ปิดบังทั้งค่า ไม่ว่า value จะเป็นชนิดไหน)
+ */
+export const isSensitiveKey = (key: string): boolean => {
+  if (!key) {
+    return false;
+  }
+
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  if (SAFE_KEYS.has(normalized)) {
+    return false;
+  }
+
+  return SECRET_KEY_PATTERN.test(normalized);
+};
+
 export const maskBody = (
   input: any,
 ): any => {
@@ -106,30 +156,44 @@ export const maskBody = (
     }
   };
 
-  // ---------- recursive ----------
-  const process = (data: any): any => {
-    if (Array.isArray(data)) {
-      return data.map(process);
+  /**
+   * ปิดบังค่าของคีย์ที่เป็นความลับทั้งก้อน
+   * - ค่าที่ถูก maskHeaders ปิดบังไว้แล้ว (มี `***` อยู่) ปล่อยผ่าน
+   *   เพื่อไม่ให้ mask ซ้ำจนเสียรูปแบบ `<first 8>***<last 4>` เดิม
+   * - number/boolean ก็ปิดบัง (เช่น `otp: 123456`)
+   * - object/array คงโครงสร้างไว้ แต่ปิดบัง leaf ทุกตัว
+   */
+  const maskSecret = (data: any): any => {
+    if (data === null || data === undefined) {
+      return data;
     }
 
-    if (data !== null && typeof data === 'object') {
+    if (Array.isArray(data)) {
+      return data.map((item) => maskSecret(item));
+    }
+
+    if (typeof data === 'object') {
       const result: AnyObject = {};
       for (const key in data) {
-        result[key] = process(data[key]);
+        result[key] = maskSecret(data[key]);
       }
       return result;
     }
 
     if (typeof data === 'string') {
-      // ไม่มี key → treat as generic
-      return maskValue('none', data);
+      return data.includes(SECRET_MASK) ? data : SECRET_MASK;
     }
 
-    return data;
+    return SECRET_MASK;
   };
 
-  // ---------- main processing ----------
+  // ---------- recursive ----------
   const processWithKey = (data: any, parentKey = ''): any => {
+    // ความลับต้องถูกปิดบังก่อน detector อื่นทั้งหมด (เช่น `password` ไม่ควรถูกมองเป็น name)
+    if (isSensitiveKey(parentKey)) {
+      return maskSecret(data);
+    }
+
     if (Array.isArray(data)) {
       return data.map((item) => processWithKey(item, parentKey));
     }
@@ -151,4 +215,4 @@ export const maskBody = (
   };
 
   return processWithKey(input);
-};
+}
