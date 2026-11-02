@@ -11,6 +11,7 @@
   "scripts": {
     "build": "nest build",
     "create:admin": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/create-admin.mts",
+    "migrate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/run-migrations.mts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",

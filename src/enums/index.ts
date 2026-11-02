@@ -1,5 +1,6 @@
 export * from './admin-businesses-sort-by.enum';
 export * from './api-key-usage-action.enum';
+export * from './bank-app.enum';
 export * from './business-subscription-status.enum';
 export * from './dashboard-interval.enum';
 export * from './dashboard-usage-metric.enum';

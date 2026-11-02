@@ -1,4 +1,4 @@
-import type { KbankIosNotificationBody } from '../types/kbank-ios-notification.type';
+import type { IosNotificationBody } from '../types/ios-notification.type';
 import { ParsedKBankMessage, parseKBankMessage } from './kbank-message.parser';
 
 /**
@@ -15,7 +15,7 @@ const MONEY_OUT_KEYWORDS = [
 ];
 
 function resolveFallbackTimestamp(
-  timestamp: KbankIosNotificationBody['timestamp'],
+  timestamp: IosNotificationBody['timestamp'],
 ): number | undefined {
   if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
     return timestamp;
@@ -42,13 +42,16 @@ function resolveFallbackTimestamp(
  * แกะยอดเงินและวันเวลาจาก Payload แจ้งเตือนของแอป KBank ที่ iOS Shortcut ส่งมา
  * (`{ app, title, body }`) แล้วคืนค่าในรูปแบบเดียวกับ {@link parseKBankMessage}
  *
+ * ฟังก์ชันนี้เป็น parser ประจำธนาคาร (KBank) ที่ถูกเรียกผ่าน registry ใน
+ * `ios-notification.parser.ts` ตามฟิลด์ `app = 'K_PLUS'`
+ *
  * คืนค่า `null` เมื่อ:
  * - ไม่มีข้อความให้แกะ
  * - เป็นการแจ้งเตือนเงินออก
  * - ไม่พบยอดเงินทศนิยม 2 ตำแหน่งในข้อความ
  */
 export function parseKbankIosNotification(
-  payload: KbankIosNotificationBody | null | undefined,
+  payload: IosNotificationBody | null | undefined,
   fallbackTimestamp?: number,
 ): ParsedKBankMessage | null {
   const title = typeof payload?.title === 'string' ? payload.title : '';
@@ -63,7 +66,8 @@ export function parseKbankIosNotification(
   }
 
   const text = title ? `${title}\n${body}` : body;
-  const timestamp = fallbackTimestamp ?? resolveFallbackTimestamp(payload?.timestamp);
+  const timestamp =
+    fallbackTimestamp ?? resolveFallbackTimestamp(payload?.timestamp);
 
   return parseKBankMessage(text, timestamp);
 }

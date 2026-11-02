@@ -31,6 +31,8 @@ describe('DatabaseSecurityService', () => {
     expect(sql).toContain(DB_SCHEMA);
     expect(sql).toContain("'payment_orders'");
     expect(sql).toContain("'webhook_logs'");
+    // ตาราง tracking ของ migration runner ก็ต้องถูกเปิด RLS ด้วย
+    expect(sql).toContain("'schema_migrations'");
   });
 
   it('catches and logs warnings without throwing when query fails', async () => {

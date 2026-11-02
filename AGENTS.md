@@ -21,9 +21,26 @@ pnpm test                                # Run all unit tests (*.spec.ts)
 pnpm test -- src/webhook/utils/kbank-message.parser.spec.ts  # Run a single unit test
 pnpm test:e2e                            # Run e2e tests (test/jest-e2e.json)
 pnpm create:admin                        # Create/update admin user from ADMIN_USERNAME/ADMIN_PASSWORD in .env
+pnpm migrate                             # Apply pending SQL files in migrations/ (records them in apay.schema_migrations)
+pnpm migrate --dry-run                   # Show which migrations would run (touches nothing)
 ```
 
 > **Admin migration script note:** `pnpm create:admin` runs `scripts/create-admin.mts` directly with Node's built-in TypeScript type stripping (Node >= 22.18 / 24 — the repo/Docker use Node 24), so unlike `nest build` it does **not** compile first. The script imports the shared logic from `src/database/admin-user.util.ts` via an explicit `.ts` specifier (Node ESM resolution) and is invoked with `--disable-warning=MODULE_TYPELESS_PACKAGE_JSON` to silence the ESM-reparse warning.
+
+## Database Migrations & Deploy
+
+Production **ไม่มี** TypeORM `synchronize` (เปิดเฉพาะ `ENV=development`) ดังนั้น schema ทุกการเปลี่ยนแปลงต้องมาเป็นไฟล์ SQL ใน `migrations/` และต้องถูก apply ทุกครั้งที่ deploy
+
+- **Runner**: `scripts/run-migrations.mts` (`pnpm migrate`) → ใช้ `pg` ตรง ๆ, อ่านไฟล์ `migrations/YYYYMMDD_<name>.sql` ที่ชื่อผ่าน `MIGRATION_FILE_PATTERN`, รัน **ตามลำดับชื่อ** (lexical = chronological) เฉพาะไฟล์ที่ยังไม่ถูกบันทึกในตาราง `apay.schema_migrations` (`name` PK, `applied_at`)
+  - idempotent: รันซ้ำจะขึ้น `Database is up to date (N migrations applied)`
+  - `--dry-run` = แสดงรายการเฉย ๆ ไม่เขียนอะไรลง DB
+  - ไม่ห่อ transaction ให้ → **ไฟล์ migration ต้อง idempotent** และจัดการ `BEGIN/COMMIT` เอง (ไฟล์ปัจจุบันทำแบบนี้ทั้งหมด)
+  - shared logic + unit test อยู่ที่ `src/database/migration.util.ts` / `migration.util.spec.ts`
+- **`deploy.sh`** (`/var/www/apay-backend`, PM2 `apay-backend`, branch `main`) รัน 6 ขั้น: `git checkout` → `git pull` → `pnpm install --frozen-lockfile` → `pnpm build` → **`pnpm migrate`** → `pm2 restart` + health check (`HEALTH_URL`, default `http://127.0.0.1:3000/api/v1/app/health`, retry 15×2s; ถ้าไม่ผ่านจะ `pm2 logs --nostream` แล้ว exit 1)
+  - migration รันหลัง build (ถ้า build fail จะไม่แตะ schema) และก่อน restart (โค้ดใหม่ออกมาพร้อม schema ใหม่เสมอ)
+  - ต้องมี `.env` ที่มี `DATABASE_URL` ไม่งั้น script หยุดก่อน migrate
+  - `SKIP_MIGRATIONS=1 ./deploy.sh` = ข้าม migration (ใช้เฉพาะกรณีฉุกเฉิน)
+- **บทเรียนจริง**: เคยมี outage เพราะ migration `20261102_remove_line_integration.sql` ไม่เคยถูกสั่งรันบน prod → `webhook_logs.message_id` ไม่มี → `POST /api/v1/webhooks/ios-notify` (เดิม `/webhooks/kbank/ios-notify`) ตอบ 500 `column "message_id" does not exist` ทุกครั้ง (transaction rollback ทำให้ order ไม่ถูก mark `PAID`) — ก่อนหน้านี้ `deploy.sh` ไม่มีขั้น migrate จึงไม่มีใครรัน SQL ให้
 
 > **Jest & ESM note:** NestJS v12 packages (`@nestjs/common`, `@nestjs/testing`, ...) are ESM-only (`"type": "module"`). Jest needs Node's VM modules to `require()` them, so all `test*` scripts run Jest via `node --experimental-vm-modules node_modules/jest/bin/jest.js` (instead of the bare `jest` binary). Keep this flag when adding new test scripts, otherwise suites importing `@nestjs/testing` fail with `Must use import to load ES Module`.
 
@@ -39,7 +56,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - **Stages**: `base` (Node + pnpm) → `deps` (`pnpm install --frozen-lockfile`, includes devDeps + `python3/make/g++` for the `bcrypt` native build) → `build` (`pnpm build` then `pnpm prune --prod`) → `runtime` (copies only `dist/`, production `node_modules/`, `package.json`).
 - **`pnpm-workspace.yaml` must be copied in the deps stage**: it holds pnpm 11 `allowBuilds` (`bcrypt: true`), without it bcrypt's install script is skipped and the app crashes at runtime.
 - **Runtime**: runs as non-root `node`, `NODE_ENV=production`, `PORT=3000`, `CMD ["node","dist/main.js"]` (CommonJS build because `package.json` has no `"type": "module"`). `HEALTHCHECK` polls `GET /api/v1/app/health` with Node's built-in `fetch` (the slim image has no curl/wget).
-- **Config comes from env only** — `DATABASE_URL`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `KBANK_IOS_WEBHOOK_SECRET` must be passed at `docker run`/orchestrator level. Never bake `.env` into the image (`.dockerignore` excludes `.env*`). Do **not** set `ENV=development` in the image, otherwise TypeORM `synchronize` runs.
+- **Config comes from env only** — `DATABASE_URL`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `IOS_WEBHOOK_SECRET` (legacy alias `KBANK_IOS_WEBHOOK_SECRET`) must be passed at `docker run`/orchestrator level. Never bake `.env` into the image (`.dockerignore` excludes `.env*`). Do **not** set `ENV=development` in the image, otherwise TypeORM `synchronize` runs.
 - `.dockerignore` excludes `node_modules`, `dist`, tests/specs, docs, `migrations/` and secrets so the build context stays small.
 
 ## Testing Rules
@@ -63,6 +80,11 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
     - Response log (`ResInterceptor`) is written once on `finish` (or `close` for aborted connections — a `logged` guard prevents double logging) with final `statusCode`, `res_headers`, `res_body`, `time_diff_ms` (real duration), and `error` (`{ name, message }`, `null` on success).
     - `res_body` is never `null` for failures: on `catchError` the interceptor rebuilds the error envelope (`{ ok: false, status, correlation_id, message }`) from the `HttpException` (array validation messages preserved); non-`HttpException` errors log `{ ok: false, status: 500, correlation_id, message: 'Internal server error' }`.
     - `maskHeaders` masks sensitive header values (`Authorization`, `Cookie`, `Set-Cookie`, `x-api-key`, `X-Refresh-Token`, ...) case-insensitively as `<first 8>***<last 4>` (`***` for short values), then passes the remaining values through `maskBody` so PII in custom headers is masked too.
+    - `maskBody` (`src/utils/maskBody.ts`) ปิดบัง 2 ระดับ:
+      1. **คีย์ที่เป็นความลับ → ปิดทั้งค่าเป็น `***`** ผ่าน `isSensitiveKey()` (normalize คีย์ด้วยการตัด `_`/`-`/ช่องว่าง แล้วเทียบ regex): `password*`, `secret*` (รวม `x-webhook-secret`), `token*` (`access_token`, `refresh_token`, `refresh_token_hash`, `x-refresh-token`), `otp*`, `api_key`/`x-api-key`, `credential*`, `private_key`, `authorization`, `cookie` — ใช้กับ number/boolean ด้วย (เช่น `otp: 123456`) และคงโครงสร้าง object/array ไว้; ค่าที่มี `***` อยู่แล้ว (ถูก `maskHeaders` ปิดมาก่อน) จะไม่ถูก mask ซ้ำ
+         - **ยกเว้น** `SAFE_KEYS` ที่ไม่ใช่ความลับและต้องอ่านได้ใน log: `api_key_id`, `api_key_prefix`, `token_type`, `token_expires_in`, `token_expires_at`
+      2. **PII → ปิดบางส่วนตามชนิด** (เดิม): `phone`/`msisdn` (`081XXX5678`), `email` (`merXXX`), `card` (`411122XXXXXX4444`), `bank_account`, `citizen_id`, `first_name`/`last_name`/`name`, `url`/`link` (เหลือแค่ `protocol//host`)
+    - เหตุผลที่มีข้อ 1: ก่อนหน้านี้ `req_body` ของ `POST /auth/login` log `password` เป็น plaintext, `res_body` log `access_token`/`refresh_token` เต็ม ๆ และ header `x-webhook-secret` หลุดออกมา — ห้ามถอยกลับไปพฤติกรรมนั้น (มี unit test คุมอยู่ที่ `maskBody.spec.ts` / `maskHeaders.spec.ts`)
 - **CORS (`src/common/config/cors.config.ts`)**: `main.ts` calls `app.enableCors(buildCorsOptions())` **before** the correlation-id middleware so browser clients (frontend `http://localhost:3001`) can call the API and preflight `OPTIONS` requests succeed.
   - Allowed origins come from `CORS_ORIGINS` (comma-separated, trailing slashes stripped). When unset/blank it falls back to `DEFAULT_CORS_ORIGINS = ['*']`, allowing any origin by default.
   - `CORS_ORIGINS=*` or `CORS_ALLOW_ALL=true` reflects any origin, but then `credentials` is forced to `false` (browsers reject `*` + credentials). A specific `CORS_ORIGINS` list keeps credentials enabled and rejects origins outside the list.
@@ -74,6 +96,7 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
   - `payment-order-status.enum.ts` → `PaymentOrderStatusEnum` + type `PaymentOrderStatus`
   - `webhook-process-status.enum.ts` → `WebhookProcessStatusEnum` + type `WebhookProcessStatus`
   - `api-key-usage-action.enum.ts` → `ApiKeyUsageActionEnum` + type `ApiKeyUsageAction`
+  - `bank-app.enum.ts` → `BankAppEnum` (แอปธนาคารที่รับแจ้งเตือนผ่าน `POST /webhooks/ios-notify`, ตอนนี้มี `KBANK_K_PLUS = 'K_PLUS'`) + type `BankApp`
   - Query-value enums: `dashboard-interval.enum.ts`, `dashboard-usage-metric.enum.ts`, `sort-order.enum.ts`, `admin-businesses-sort-by.enum.ts` (`AdminBusinessesSortByEnum` + type `AdminBusinessesSortBy`)
   - Each file exports the runtime enum **and** a string-literal union type derived from it (`` `${XEnum}` ``), so entity/DTO types keep the exact same shape as before. Entity files (`payment-order.entity.ts`, `business-subscription.entity.ts`, `webhook-log.entity.ts`, `api-key-usage-log.entity.ts`) and `auth/types/auth-user.type.ts` re-export those types for backwards compatibility.
   - **ห้ามประกาศ union literal ซ้ำในโมดูลอื่น**: import จาก `src/enums` (หรือไฟล์ enum โดยตรง) และใช้ `Object.values(<Enum>)` เป็นค่าให้ `@IsIn(...)` / `In([...])` แทนการพิมพ์ค่าด้วยมือ เพื่อไม่ให้ validation กับ entity หลุดจากกัน (มี test คุมสัญญาที่ `src/enums/enums.spec.ts`)
@@ -87,9 +110,9 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
   3. Use `numericTransformer` (`src/common/transformers/numeric.transformer.ts`) on `@Column({ type: 'numeric', ... })` fields so PostgreSQL `numeric` values map to JS `number` instead of `string`.
 - **Auto-Synchronize & Seeding**:
   - TypeORM `synchronize` is controlled by `ENV === 'development'` (checks `ENV`, **not** `NODE_ENV`). Before synchronizing, `AppModule` runs `CREATE SCHEMA IF NOT EXISTS "apay"`.
-  - On bootstrap, `DatabaseSeederService` seeds default roles (`admin`, `business`), default master packages (`FREE`, `STARTER`, `PRO` — idempotent by `code`) and upserts the admin user if `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set.
+  - On bootstrap, `DatabaseSeederService` seeds default roles (`admin`, `business`), the default master package (`FREE` only — `code = FREE`, `price = 0`, `max_api_keys = 1`, `quota_limit = 100`, `rate_limit_per_hour = 60`, `billing_cycle_months = 1`, idempotent by `code`) and upserts the admin user if `ADMIN_USERNAME` and `ADMIN_PASSWORD` are set. `STARTER` / `PRO` ไม่อยู่ใน seeder แล้ว — สร้าง/แก้ไขผ่าน `POST /api/v1/packages` หรือ `PATCH /api/v1/packages/:id` เท่านั้น
   - **Standalone admin migration (`pnpm create:admin` → `scripts/create-admin.mts`)**: runnable without booting/Nest or restarting the app. It loads `.env` (only when `DATABASE_URL`/`ADMIN_USERNAME`/`ADMIN_PASSWORD` are not already in the process env — real env wins), connects with `pg`, hashes the password with bcrypt (10 rounds), and inside one transaction: upserts the `admin` role in `apay.roles` if missing, then inserts a new `apay.users` row **or** updates the existing username (password, `role_id = admin`, `is_active = true`, `refresh_token_hash = NULL`, `updated_at = now()`). Idempotent, safe to re-run; shared logic + unit tests live in `src/database/admin-user.util.ts` / `admin-user.util.spec.ts`.
-- **Tables in `TABLES` (`src/database/database-security.service.ts`)**: `roles`, `users`, `businesses`, `packages`, `business_subscriptions`, `subscription_periods`, `api_keys`, `api_key_usage_logs`, `payment_orders`, `webhook_logs`, `business_email_otps`.
+- **Tables in `TABLES` (`src/database/database-security.service.ts`)**: `roles`, `users`, `businesses`, `packages`, `business_subscriptions`, `subscription_periods`, `api_keys`, `api_key_usage_logs`, `payment_orders`, `webhook_logs`, `business_email_otps`, `schema_migrations` (ตาราง tracking ของ migration runner — ไม่มี entity แต่ใส่ไว้ให้เปิด RLS ด้วย)
 - **Schema Notes**:
   - `businesses.email` (`varchar(255)`, nullable in DB, **unique** via `idx_businesses_email`) is the business contact email. It is **required** in the `POST /register-business` request (`@IsEmail`, max 255, normalized to lowercase/trimmed by `@Transform`) and is returned in the response; the column stays nullable only to support businesses created before this field existed (migrations `migrations/20261025_add_business_email.sql`, `migrations/20261025_add_business_email_otp.sql`). One email can only be bound to one business.
   - `business_email_otps` stores self-registration OTPs: `email` (`varchar(255)`), `otp_hash` (`varchar(128)`, **SHA-256 only — never the raw code**), `attempts` (`integer`, default `0`), `expires_at`, `consumed_at` (nullable), `created_at`, indexed by `idx_business_email_otps_email_created` (`email`, `created_at`).
@@ -158,21 +181,24 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
     - `order.lookup_key`: `YYYYMMDD_<total_amount.toFixed(2)>`
   - Generates EMVCo PromptPay payload via `promptpay-qr` using `business.promptpay_id` and `total_amount`, plus a Base64 PNG Data URL via `qrcode`.
 
-### 6. KBank Webhook & Matching (`src/webhook/`)
+### 6. Bank Webhook & Matching (`src/webhook/`)
 
 **Endpoint**
-- `POST /api/v1/webhooks/kbank/ios-notify` — แจ้งเตือนเงินเข้าจากแอป KBank (K PLUS) ที่ iOS Shortcut ส่งต่อมา
-  - Body: `{ app: 'K_PLUS', title: 'รายการเงินเข้า', body: 'บัญชี xxx-x-x8583-x  จำนวนเงิน 1.00 บาท  วันที่ 1 พ.ย. 69  22:57 น.' }` (`KbankIosNotificationBody`, optional `timestamp` ใช้เป็น fallback เมื่อไม่มีวันเวลาในข้อความ)
-  - ถ้าตั้ง Env `KBANK_IOS_WEBHOOK_SECRET` ต้องส่ง Header `x-webhook-secret` ให้ตรง (ไม่ตรง → `401 Unauthorized`); ถ้าไม่ตั้งจะเปิดให้เรียกได้ (dev)
+- `POST /api/v1/webhooks/ios-notify` — endpoint **กลางของทุกธนาคาร** (เดิม `/webhooks/kbank/ios-notify` ซึ่งถูกลบไปแล้ว) รับแจ้งเตือนเงินเข้าที่ iOS Shortcut ส่งต่อมา
+  - Body: `{ app: 'K_PLUS', title: 'รายการเงินเข้า', body: 'บัญชี xxx-x-x8583-x  จำนวนเงิน 1.00 บาท  วันที่ 1 พ.ย. 69  22:57 น.' }` (`IosNotificationBody`, optional `timestamp` ใช้เป็น fallback เมื่อไม่มีวันเวลาในข้อความ)
+  - ฟิลด์ `app` ใช้เลือก parser ของแต่ละธนาคารผ่าน registry (`resolveBankApp()` — trim + case-insensitive) และค่าที่รองรับถูกประกาศไว้ที่ `BankAppEnum` (`src/enums/bank-app.enum.ts`) — **ตอนนี้รองรับเฉพาะ `K_PLUS` (KBank)**
+  - ธนาคารที่ยังไม่รองรับ หรือไม่ส่ง `app` มา → `400 Bad Request` `Unsupported bank app: "<app>" (หรือ missing). Supported apps: K_PLUS` และ**ไม่เขียน** `webhook_logs`
+  - ถ้าตั้ง Env `IOS_WEBHOOK_SECRET` (หรือ `KBANK_IOS_WEBHOOK_SECRET` ชื่อเดิม ซึ่งยังใช้ได้เพื่อ backward compatibility) ต้องส่ง Header `x-webhook-secret` ให้ตรง (ไม่ตรง → `401 Unauthorized`); ถ้าไม่ตั้งทั้งสองตัวจะเปิดให้เรียกได้ (dev)
   - ไม่มี message id จากต้นทาง → สร้าง `webhook_logs.message_id = ios-<uuid>` และตอบ `{ processed: 1, matched, order_id }`
   - **Idempotency**: อาศัยสถานะ Order (จับคู่ได้เฉพาะ `UNVERIFIED`) — ยิงซ้ำจะกลายเป็น `NO_MATCH` และไม่หักโควต้าซ้ำ
 - ไม่มี LINE webhook endpoint แล้ว — การจับคู่ทุกรายการใช้ **ยอดเงิน + วันเวลา** เท่านั้น
 
 **Parsers**
+- `src/webhook/utils/ios-notification.parser.ts`: registry ที่แยก parser ตามธนาคาร — `BANK_NOTIFICATION_PARSERS` เป็น `Record<BankApp, BankNotificationParser>` (เพิ่ม enum แล้ว TypeScript บังคับให้ต้องมี parser), `resolveBankApp()`, `isSupportedBankApp()`, `SUPPORTED_BANK_APPS` และ `parseIosNotification()` ที่ dispatch ตาม `app` (คืน `null` เมื่อธนาคารไม่รองรับ) — **เพิ่มธนาคารใหม่ = เพิ่มค่าใน `BankAppEnum` + เพิ่ม parser ใน registry นี้เท่านั้น**
 - `src/webhook/utils/kbank-message.parser.ts`:
   - Extracts 2-decimal transfer amount from Thai KBank notifications (keywords: `จำนวนเงิน`, `จำนวน`, `เงินเข้า`, `รับโอนเงิน`, `รับโอน`, `รับเงิน`, `โอนเข้า`).
   - Parses `DD/MM/YY(YY)` **หรือ** ชื่อเดือนไทย `D <เดือน> YY(YY)` (เช่น `1 พ.ย. 69`, รองรับชื่อเต็ม/ย่อ และมี/ไม่มีจุด) พร้อม `HH:mm` ใน `Asia/Bangkok`, converting 2-digit or 4-digit Thai Buddhist Era (พ.ศ.) years to CE (`convertBuddhistYearToCE`), falling back to the payload timestamp if no date is in the text.
-- `src/webhook/utils/kbank-ios-notification.parser.ts`: รวม `title` + `body` แล้วส่งต่อให้ `parseKBankMessage`; คืน `null` เมื่อไม่มี `body`, เป็นแจ้งเตือนเงินออก (`เงินออก`/`โอนออก`/`ถอนเงิน`/`จ่ายบิล`/`ชำระบิล`) หรือไม่พบยอดเงิน
+- `src/webhook/utils/kbank-ios-notification.parser.ts` (parser ประจำธนาคาร KBank): รวม `title` + `body` แล้วส่งต่อให้ `parseKBankMessage`; คืน `null` เมื่อไม่มี `body`, เป็นแจ้งเตือนเงินออก (`เงินออก`/`โอนออก`/`ถอนเงิน`/`จ่ายบิล`/`ชำระบิล`) หรือไม่พบยอดเงิน
 
 **Order Matching, Quota Deduction & Callback (`WebhookService`)**
 - ใช้ `lookupKey = "${parsed.dateStr}_${parsed.amount}"` และค้นหาใน transaction ด้วย `pessimistic_write` lock เฉพาะ `status = 'UNVERIFIED'` + `expires_at >= :transferTime` (`findUnverifiedOrder`), เรียง `created_at DESC`
@@ -223,7 +249,8 @@ docker run --rm -p 3000:3000 --env-file .env apay-backend
 - `DATABASE_URL`: PostgreSQL connection string. **On Supabase use the Supavisor pooler host, not the direct `db.<project-ref>.supabase.co` host** (the direct host is IPv6-only and resolves to a single AAAA record with no A record, so IPv4-only machines/NAT/CI/Docker fail with `getaddrinfo ENOTFOUND`). Format: `postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres` (port `5432` = session mode, keeps prepared statements/transactions working for TypeORM; port `6543` = transaction mode, only for short-lived/serverless clients). The current project `wsxgyyigdomwabrpkmlg` lives in `ap-northeast-1`. No `ssl` block is set in `TypeOrmModule`, so the URL must point at a host that accepts plaintext connections (the pooler does).
 - `JWT_SECRET` / `JWT_REFRESH_SECRET`: Secrets for access and refresh tokens (`JWT_EXPIRES_IN` defaults to `15m`, `JWT_REFRESH_EXPIRES_IN` defaults to `7d`).
 - `ADMIN_USERNAME` / `ADMIN_PASSWORD`: Used by `DatabaseSeederService` to seed the initial `admin` user and by `pnpm create:admin` (`scripts/create-admin.mts`) to create/update an admin user on demand.
-- `KBANK_IOS_WEBHOOK_SECRET`: Shared secret for `POST /api/v1/webhooks/kbank/ios-notify` (Header `x-webhook-secret`). If unset/blank the endpoint accepts any caller (dev only) — set it in production.
+- `IOS_WEBHOOK_SECRET`: Shared secret for `POST /api/v1/webhooks/ios-notify` (Header `x-webhook-secret`). If unset/blank the endpoint accepts any caller (dev only) — set it in production.
+- `KBANK_IOS_WEBHOOK_SECRET`: Legacy name of the same shared secret, still honored when `IOS_WEBHOOK_SECRET` is unset (backward compatibility). `IOS_WEBHOOK_SECRET` wins when both are set.
 - `CORS_ORIGINS`: Comma-separated list of browser origins allowed to call the API (e.g. `http://localhost:3001,https://app.apay.com`). Defaults to `*` (any origin; forces `credentials: false`). Set a specific list to restrict origins.
 - `CORS_ALLOW_ALL`: Set to `'true'` as an alternative to `CORS_ORIGINS=*`.
 - `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` / `SMTP_FROM_NAME`: SMTP credentials for sending self-registration OTP emails (`src/mail/mail.service.ts`). `SMTP_PORT` defaults to `587`, `SMTP_SECURE` (`'true'`) defaults to off but is forced on when the port is `465`, and `SMTP_FROM` falls back to `SMTP_USER`. If `SMTP_HOST` or the from address is missing, `POST /auth/register-business/request-otp` returns `503` ("Email service is not configured").

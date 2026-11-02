@@ -267,7 +267,7 @@
           "3. **Admin หรือ Business** สร้าง API Key ผ่าน `POST /api/v1/api-keys` (ได้ Raw Key `apay_live_<8_hex>_<32_hex>` เพียงครั้งเดียว และจำกัดจำนวนตาม `max_api_keys`)",
           "4. **Business / Merchant** นำ `api_key` มาแลกเป็น JWT (`access_token`, `refresh_token`) ที่ `POST /api/v1/auth/token` (Token จะแนบ `api_key_id`) หรือเข้าสู่ระบบด้วย username/password",
           "5. **สร้างรายการชำระเงิน PromptPay QR** ที่ `POST /api/v1/payments/qr` ระบบตรวจโควต้า/Rate Limit, จองทศนิยมอ้างอิง (`0.01` - `0.99`) ให้อัตโนมัติ (หรือส่ง `zero_decimal: true` เพื่อสร้างยอดลงท้าย `.00` เช่น `99.00`) มีอายุ **5 นาที** และบันทึก `QR_CREATED`",
-          "6. เมื่อลูกค้าโอนเงินและแอป KBank แจ้งเตือน (ส่งต่อผ่าน iOS Shortcut) มาที่ `POST /api/v1/webhooks/kbank/ios-notify` ระบบจะจับคู่ยอด + วันเวลา (`lookup_key = YYYYMMDD_<total_amount>`) เปลี่ยนสถานะเป็น `PAID`, หักโควต้า 1 ครั้ง, บันทึก `QR_PAID` และยิง Webhook Callback (`event: 'payment.paid'`) ไปยัง `redirect_url` ของออเดอร์นั้นทันที"
+          "6. เมื่อลูกค้าโอนเงินและแอปธนาคารแจ้งเตือน (ส่งต่อผ่าน iOS Shortcut) มาที่ `POST /api/v1/webhooks/ios-notify` (endpoint กลางทุกธนาคาร เลือก parser ตามฟิลด์ `app` เช่น `K_PLUS` = KBank) ระบบจะจับคู่ยอด + วันเวลา (`lookup_key = YYYYMMDD_<total_amount>`) เปลี่ยนสถานะเป็น `PAID`, หักโควต้า 1 ครั้ง, บันทึก `QR_PAID` และยิง Webhook Callback (`event: 'payment.paid'`) ไปยัง `redirect_url` ของออเดอร์นั้นทันที"
         ].join("\n")
       },
       servers: [
@@ -884,12 +884,15 @@
               }
             }
           },
-          KbankIosNotificationRequest: {
+          IosNotificationRequest: {
             type: "object",
+            required: ["app", "body"],
             properties: {
               app: {
                 type: "string",
-                example: "K_PLUS"
+                enum: ["K_PLUS"],
+                example: "K_PLUS",
+                description: "แอปธนาคารต้นทาง — ใช้เลือก parser ของแต่ละธนาคาร (ตอนนี้รองรับเฉพาะ `K_PLUS` = KBank; ค่าอื่นตอบ `400`)"
               },
               title: {
                 type: "string",
@@ -908,7 +911,7 @@
               }
             }
           },
-          KbankIosNotificationData: {
+          IosNotificationData: {
             type: "object",
             required: ["processed", "matched", "order_id"],
             properties: {
@@ -3632,15 +3635,16 @@
             }
           }
         },
-        "/api/v1/webhooks/kbank/ios-notify": {
+        "/api/v1/webhooks/ios-notify": {
           post: {
             tags: ["Webhooks"],
-            summary: "รับแจ้งเตือนเงินเข้าจาก KBank ผ่าน iOS Shortcut",
+            summary: "รับแจ้งเตือนเงินเข้าจากแอปธนาคารผ่าน iOS Shortcut (endpoint กลาง)",
             description: [
-              "รับ Payload `{ app, title, body }` ที่ iOS Shortcut ส่งต่อมาจากการแจ้งเตือนของแอป KBank (K PLUS) แล้วจับคู่กับ Order ที่สถานะ `UNVERIFIED` ด้วย **ยอดเงิน + วันเวลา**",
+              "Endpoint กลางของทุกธนาคาร (เดิม `/api/v1/webhooks/kbank/ios-notify`) รับ Payload `{ app, title, body }` ที่ iOS Shortcut ส่งต่อมาจากการแจ้งเตือนของแอปธนาคาร แล้วจับคู่กับ Order ที่สถานะ `UNVERIFIED` ด้วย **ยอดเงิน + วันเวลา**",
               "",
               "**รายละเอียด:**",
-              "- ถ้าตั้งค่า `KBANK_IOS_WEBHOOK_SECRET` ต้องส่ง Header `x-webhook-secret` ให้ตรง มิฉะนั้นตอบ `401`",
+              "- ฟิลด์ `app` ใช้เลือก Parser ของแต่ละธนาคาร (trim + case-insensitive) — ตอนนี้รองรับเฉพาะ `K_PLUS` (KBank) ถ้าเป็นธนาคารที่ยังไม่รองรับหรือไม่ส่ง `app` จะตอบ `400` และไม่บันทึก `webhook_logs`",
+              "- ถ้าตั้งค่า `IOS_WEBHOOK_SECRET` (หรือ `KBANK_IOS_WEBHOOK_SECRET` ชื่อเดิม) ต้องส่ง Header `x-webhook-secret` ให้ตรง มิฉะนั้นตอบ `401`",
               "- สกัดยอดเงินทศนิยม 2 ตำแหน่งและวันเวลาโอน (แปลงปี พ.ศ. เป็น ค.ศ. อัตโนมัติ) เพื่อค้นหา `lookup_key = YYYYMMDD_<amount>` ที่ยังไม่หมดอายุ (`expires_at >= transferTime`)",
               "- เมื่อจับคู่ได้จะเปลี่ยนสถานะเป็น `PAID`, หักโควต้า 1 ครั้ง (ถ้า Subscription ยัง `ACTIVE`), บันทึก `api_key_usage_logs` (`QR_PAID`) หาก Order มี `api_key_id` และยิง Callback `payment.paid` หากมี `redirect_url`",
               "- Idempotency อาศัยสถานะ Order — ยิงซ้ำจะได้ `NO_MATCH` และไม่หักโควต้าซ้ำ"
@@ -3651,7 +3655,7 @@
                 name: "x-webhook-secret",
                 in: "header",
                 required: false,
-                description: "Shared secret (บังคับเมื่อตั้งค่า `KBANK_IOS_WEBHOOK_SECRET`)",
+                description: "Shared secret (บังคับเมื่อตั้งค่า `IOS_WEBHOOK_SECRET` หรือ `KBANK_IOS_WEBHOOK_SECRET`)",
                 schema: { type: "string" }
               }
             ],
@@ -3659,7 +3663,7 @@
               required: true,
               content: {
                 "application/json": {
-                  schema: { $ref: "#/components/schemas/KbankIosNotificationRequest" }
+                  schema: { $ref: "#/components/schemas/IosNotificationRequest" }
                 }
               }
             },
@@ -3679,7 +3683,7 @@
                           format: "uuid",
                           example: "550e8400-e29b-41d4-a716-446655440000"
                         },
-                        data: { $ref: "#/components/schemas/KbankIosNotificationData" }
+                        data: { $ref: "#/components/schemas/IosNotificationData" }
                       }
                     }
                   }
@@ -3695,6 +3699,20 @@
                       status: 401,
                       correlation_id: "550e8400-e29b-41d4-a716-446655440000",
                       message: "Invalid webhook secret"
+                    }
+                  }
+                }
+              },
+              "400": {
+                description: "ธนาคารที่ส่งมา (`app`) ยังไม่รองรับ หรือไม่ได้ส่ง `app` มา",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/ErrorEnvelope" },
+                    example: {
+                      ok: false,
+                      status: 400,
+                      correlation_id: "550e8400-e29b-41d4-a716-446655440000",
+                      message: 'Unsupported bank app: "SCB_EASY". Supported apps: K_PLUS'
                     }
                   }
                 }
