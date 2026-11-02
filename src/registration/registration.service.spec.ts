@@ -72,7 +72,10 @@ describe('RegistrationService', () => {
           provide: getRepositoryToken(BusinessEmailOtp),
           useValue: otpRepository,
         },
-        { provide: getRepositoryToken(Business), useValue: businessesRepository },
+        {
+          provide: getRepositoryToken(Business),
+          useValue: businessesRepository,
+        },
         { provide: BusinessService, useValue: businessService },
         { provide: MailService, useValue: mailService },
         { provide: ConfigService, useValue: configService },
@@ -231,8 +234,6 @@ describe('RegistrationService', () => {
 
       await service.verifyOtpAndRegister({
         ...REGISTER_PAYLOAD,
-        line_destination: 'U-destination',
-        line_user_id: 'U-owner',
         package_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
       });
 
@@ -242,8 +243,6 @@ describe('RegistrationService', () => {
         business_name: 'Coffee Shop',
         email: 'owner@example.com',
         promptpay_id: '0812345678',
-        line_destination: 'U-destination',
-        line_user_id: 'U-owner',
         package_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
       });
     });

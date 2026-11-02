@@ -5,13 +5,9 @@ import {
   HttpCode,
   HttpStatus,
   Post,
-  Req,
   UnauthorizedException,
 } from '@nestjs/common';
-import type { RawBodyRequest } from '@nestjs/common';
-import { Request } from 'express';
 import type { KbankIosNotificationBody } from './types/kbank-ios-notification.type';
-import type { LineWebhookBody } from './types/line-webhook.type';
 import { WebhookService } from './webhook.service';
 
 @Controller({
@@ -20,25 +16,6 @@ import { WebhookService } from './webhook.service';
 })
 export class WebhookController {
   constructor(private readonly webhookService: WebhookService) {}
-
-  @Post('kbank/line')
-  @HttpCode(HttpStatus.OK)
-  handleKbankLineWebhook(
-    @Req() request: RawBodyRequest<Request>,
-    @Body() body: LineWebhookBody,
-    @Headers('x-line-signature') signature?: string,
-  ) {
-    const isValid = this.webhookService.verifySignature(
-      request.rawBody,
-      signature,
-    );
-
-    if (!isValid) {
-      throw new UnauthorizedException('Invalid LINE signature');
-    }
-
-    return this.webhookService.handleWebhook(body);
-  }
 
   /**
    * รับแจ้งเตือนเงินเข้าจากแอป KBank (K PLUS) ที่ส่งต่อผ่าน iOS Shortcut

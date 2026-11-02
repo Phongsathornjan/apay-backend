@@ -71,7 +71,6 @@ export class AuthService {
 
     const role = user.role.name as UserRole;
     let businessId: string | null = null;
-    let lineUserId: string | null = null;
 
     if (role === RoleEnum.BUSINESS) {
       const business = await this.businessService.findByUserId(user.id);
@@ -81,7 +80,6 @@ export class AuthService {
       }
 
       businessId = business.id;
-      lineUserId = business.line_user_id ?? null;
     }
 
     const tokens = await this.signTokenBundle({
@@ -104,7 +102,6 @@ export class AuthService {
         username: user.username,
         role,
         business_id: businessId,
-        line_user_id: lineUserId,
       },
     };
   }
@@ -222,7 +219,9 @@ export class AuthService {
     const userHash = user.refresh_token_hash;
     const businessHash = business?.refresh_token_hash ?? null;
 
-    const matchesUserHash = userHash ? safeCompare(incomingHash, userHash) : false;
+    const matchesUserHash = userHash
+      ? safeCompare(incomingHash, userHash)
+      : false;
     const matchesBusinessHash = businessHash
       ? safeCompare(incomingHash, businessHash)
       : false;
@@ -279,7 +278,8 @@ export class AuthService {
   }
 
   private async signTokenBundle(params: SignTokenParams): Promise<TokenBundle> {
-    const accessExpiresIn = this.configService.get<string>('JWT_EXPIRES_IN') ??
+    const accessExpiresIn =
+      this.configService.get<string>('JWT_EXPIRES_IN') ??
       DEFAULT_ACCESS_EXPIRES_IN;
     const refreshExpiresIn =
       this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ??

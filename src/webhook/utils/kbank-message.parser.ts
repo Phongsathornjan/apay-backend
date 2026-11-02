@@ -73,7 +73,10 @@ function extractAmount(text: string): string | null {
   const keywordMatch = AMOUNT_KEYWORD_REGEX.exec(text);
   let rawAmount = keywordMatch?.[1];
 
-  if (!rawAmount && AMOUNT_CONTEXT_KEYWORDS.some((word) => text.includes(word))) {
+  if (
+    !rawAmount &&
+    AMOUNT_CONTEXT_KEYWORDS.some((word) => text.includes(word))
+  ) {
     const fallbackMatch = AMOUNT_FALLBACK_REGEX.exec(text);
     rawAmount = fallbackMatch?.[1];
   }
@@ -105,7 +108,7 @@ function extractDateTime(
   const hour = timeMatch ? Number(timeMatch[1]) : 0;
   const minute = timeMatch ? Number(timeMatch[2]) : 0;
 
-  // รูปแบบที่ 1: "18/10/69" (แจ้งเตือนผ่าน LINE OA)
+  // รูปแบบที่ 1: "18/10/69" (วันที่แบบ DD/MM/YY)
   const dateMatch = DATE_REGEX.exec(text);
 
   if (dateMatch) {
@@ -152,8 +155,8 @@ function extractDateTime(
 }
 
 /**
- * แกะยอดเงิน วันเวลา โอนจากข้อความแจ้งเตือน KBank (ทั้งที่ส่งมาทาง LINE OA
- * และที่ส่งต่อมาจากแอป KBank ผ่าน iOS Shortcut)
+ * แกะยอดเงิน วันเวลา โอนจากข้อความแจ้งเตือน KBank
+ * (ส่งต่อมาจากแอป KBank ผ่าน iOS Shortcut)
  * คืนค่า null หากไม่พบยอดเงินทศนิยม 2 ตำแหน่งในข้อความ
  */
 export function parseKBankMessage(
