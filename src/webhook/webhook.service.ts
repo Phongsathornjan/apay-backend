@@ -1,5 +1,5 @@
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { AxiosError } from 'axios';
@@ -16,8 +16,12 @@ import {
 import { PaymentOrder } from '../payment/entities/payment-order.entity';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { WebhookLog } from './entities/webhook-log.entity';
-import type { KbankIosNotificationBody } from './types/kbank-ios-notification.type';
-import { parseKbankIosNotification } from './utils/kbank-ios-notification.parser';
+import type { IosNotificationBody } from './types/ios-notification.type';
+import {
+  parseIosNotification,
+  resolveBankApp,
+  SUPPORTED_BANK_APPS,
+} from './utils/ios-notification.parser';
 import { ParsedKBankMessage } from './utils/kbank-message.parser';
 
 interface CallbackPayload {
@@ -56,12 +60,16 @@ export class WebhookService {
   ) {}
 
   /**
-   * ตรวจสอบ shared secret ของ endpoint `/kbank/ios-notify` (Header `x-webhook-secret`)
-   * - ถ้าไม่ได้ตั้ง Env `KBANK_IOS_WEBHOOK_SECRET` → เปิดให้เรียกได้ (ใช้ตอน dev)
+   * ตรวจสอบ shared secret ของ endpoint `/ios-notify` (Header `x-webhook-secret`)
+   * - ใช้ `IOS_WEBHOOK_SECRET` เป็นหลัก และถอยไปใช้ `KBANK_IOS_WEBHOOK_SECRET`
+   *   (ชื่อเดิม) เพื่อไม่ให้ deployment ที่ยังตั้ง Env เก่าอยู่หยุดทำงาน
+   * - ถ้าไม่ได้ตั้งทั้งสองตัว → เปิดให้เรียกได้ (ใช้ตอน dev)
    * - ถ้าตั้งไว้ → ต้องส่ง Header ให้ตรงเท่านั้น
    */
   verifyIosNotificationSecret(secret?: string): boolean {
-    const expected = this.configService.get<string>('KBANK_IOS_WEBHOOK_SECRET');
+    const expected =
+      this.configService.get<string>('IOS_WEBHOOK_SECRET') ||
+      this.configService.get<string>('KBANK_IOS_WEBHOOK_SECRET');
 
     if (!expected) {
       return true;
@@ -75,19 +83,41 @@ export class WebhookService {
   }
 
   /**
-   * รับแจ้งเตือนเงินเข้าจากแอป KBank ที่ iOS Shortcut ส่งต่อมา
+   * ตรวจว่าฟิลด์ `app` เป็นธนาคารที่ระบบรองรับ
+   * ถ้าไม่ใช่ (หรือไม่ส่งมา) → `400 Bad Request` พร้อมรายชื่อธนาคารที่รองรับ
+   */
+  private assertSupportedBankApp(app: unknown): void {
+    if (resolveBankApp(app)) {
+      return;
+    }
+
+    const received =
+      typeof app === 'string' && app.trim() ? `"${app.trim()}"` : 'missing';
+
+    throw new BadRequestException(
+      `Unsupported bank app: ${received}. Supported apps: ${SUPPORTED_BANK_APPS.join(', ')}`,
+    );
+  }
+
+  /**
+   * รับแจ้งเตือนเงินเข้าจากแอปธนาคารที่ iOS Shortcut ส่งต่อมา
    * (`{ app, title, body }`) แล้วจับคู่กับ Order ด้วยยอดเงิน + วันเวลา
+   *
+   * ฟิลด์ `app` เป็นตัวเลือก parser ของแต่ละธนาคาร (ตอนนี้รองรับ `K_PLUS` เท่านั้น)
+   * ถ้าเป็นธนาคารที่ยังไม่รองรับ จะตอบ `400 Bad Request` กลับไปโดยไม่บันทึก log
    *
    * Idempotency: ใช้สถานะ Order เป็นตัวกันซ้ำ (จับคู่ได้เฉพาะ `UNVERIFIED`)
    * ดังนั้นการยิงซ้ำจะกลายเป็น `NO_MATCH` และไม่หักโควต้าซ้ำ
    */
   async handleIosNotification(
-    payload: KbankIosNotificationBody,
+    payload: IosNotificationBody,
   ): Promise<IosNotificationResult> {
+    this.assertSupportedBankApp(payload?.app);
+
     // ไม่มี message id จากต้นทาง → สร้างขึ้นใหม่เพื่อให้บันทึกลง webhook_logs ได้
     const messageId = `ios-${randomUUID()}`;
     const rawPayload = (payload ?? {}) as unknown as Record<string, unknown>;
-    const parsed = parseKbankIosNotification(payload);
+    const parsed = parseIosNotification(payload);
 
     if (!parsed) {
       await this.saveLog({

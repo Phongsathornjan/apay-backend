@@ -1,6 +1,7 @@
 import {
   AdminBusinessesSortByEnum,
   ApiKeyUsageActionEnum,
+  BankAppEnum,
   BusinessSubscriptionStatusEnum,
   DashboardIntervalEnum,
   DashboardUsageMetricEnum,
@@ -61,6 +62,16 @@ describe('Domain enums', () => {
     });
   });
 
+  describe('Bank apps', () => {
+    it('defines every bank app accepted by the iOS notification webhook', () => {
+      expect(Object.values(BankAppEnum)).toEqual(['K_PLUS']);
+    });
+
+    it('exposes the KBank K PLUS app as a named member', () => {
+      expect(BankAppEnum.KBANK_K_PLUS).toBe('K_PLUS');
+    });
+  });
+
   describe('Query enum values', () => {
     it('defines dashboard interval values', () => {
       expect(Object.values(DashboardIntervalEnum)).toEqual(['hour', 'day']);
@@ -101,6 +112,7 @@ describe('Domain enums', () => {
       ['DashboardUsageMetricEnum', DashboardUsageMetricEnum],
       ['SortOrderEnum', SortOrderEnum],
       ['AdminBusinessesSortByEnum', AdminBusinessesSortByEnum],
+      ['BankAppEnum', BankAppEnum],
     ];
 
     it('has unique, non-empty values in every enum', () => {
@@ -119,7 +131,7 @@ describe('Domain enums', () => {
         }
       }
 
-      expect(allEnums.map(([name]) => name)).toHaveLength(9);
+      expect(allEnums.map(([name]) => name)).toHaveLength(10);
     });
 
     it('keeps database enum keys identical to their stored values', () => {

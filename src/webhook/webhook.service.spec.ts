@@ -1,4 +1,5 @@
 import { HttpService } from '@nestjs/axios';
+import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -295,6 +296,48 @@ describe('WebhookService', () => {
       expect(httpService.post).not.toHaveBeenCalled();
       expect(ordersRepository.update).not.toHaveBeenCalled();
     });
+
+    it('rejects an unsupported bank app without writing a webhook log', async () => {
+      await expect(
+        service.handleIosNotification({
+          app: 'SCB_EASY',
+          title: 'รายการเงินเข้า',
+          body: 'จำนวนเงิน 1.00 บาท วันที่ 1 พ.ย. 69 22:57 น.',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(webhookLogsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a payload that does not specify the bank app', async () => {
+      await expect(
+        service.handleIosNotification({
+          title: 'รายการเงินเข้า',
+          body: 'จำนวนเงิน 1.00 บาท',
+        }),
+      ).rejects.toThrow(
+        'Unsupported bank app: missing. Supported apps: K_PLUS',
+      );
+
+      expect(webhookLogsRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('accepts the bank app case-insensitively with surrounding spaces', async () => {
+      queryBuilder.getOne.mockResolvedValue(null);
+
+      const result = await service.handleIosNotification({
+        ...iosPayload,
+        app: '  k_plus ',
+      });
+
+      expect(result).toEqual({
+        processed: 1,
+        matched: false,
+        order_id: null,
+      });
+      expect(dataSource.transaction).toHaveBeenCalled();
+    });
   });
 
   describe('verifyIosNotificationSecret', () => {
@@ -312,6 +355,18 @@ describe('WebhookService', () => {
       expect(service.verifyIosNotificationSecret('ios-secret')).toBe(true);
       expect(service.verifyIosNotificationSecret('wrong')).toBe(false);
       expect(service.verifyIosNotificationSecret()).toBe(false);
+    });
+
+    it('prefers IOS_WEBHOOK_SECRET over the legacy KBANK_IOS_WEBHOOK_SECRET', () => {
+      configService.get.mockImplementation((key: string) => {
+        if (key === 'IOS_WEBHOOK_SECRET') return 'new-secret';
+        if (key === 'KBANK_IOS_WEBHOOK_SECRET') return 'legacy-secret';
+
+        return undefined;
+      });
+
+      expect(service.verifyIosNotificationSecret('new-secret')).toBe(true);
+      expect(service.verifyIosNotificationSecret('legacy-secret')).toBe(false);
     });
   });
 });

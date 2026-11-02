@@ -37,7 +37,7 @@ describe('WebhookController', () => {
       order_id: '20261101_1.00',
     });
 
-    const result = await controller.handleKbankIosNotification(body, 'secret');
+    const result = await controller.handleIosNotification(body, 'secret');
 
     expect(webhookService.verifyIosNotificationSecret).toHaveBeenCalledWith(
       'secret',
@@ -50,11 +50,28 @@ describe('WebhookController', () => {
     });
   });
 
+  it('forwards notifications from any bank app so the service can reject unsupported ones', async () => {
+    const body = {
+      app: 'SCB_EASY',
+      title: 'รายการเงินเข้า',
+      body: 'จำนวนเงิน 1.00 บาท',
+    };
+    webhookService.verifyIosNotificationSecret.mockReturnValue(true);
+    webhookService.handleIosNotification.mockRejectedValue(
+      new Error('Unsupported bank app'),
+    );
+
+    await expect(
+      controller.handleIosNotification(body, 'secret'),
+    ).rejects.toThrow('Unsupported bank app');
+    expect(webhookService.handleIosNotification).toHaveBeenCalledWith(body);
+  });
+
   it('throws UnauthorizedException when the iOS webhook secret is invalid', () => {
     webhookService.verifyIosNotificationSecret.mockReturnValue(false);
 
     expect(() =>
-      controller.handleKbankIosNotification({ body: 'เงินเข้า 1.00' }, 'bad'),
+      controller.handleIosNotification({ body: 'เงินเข้า 1.00' }, 'bad'),
     ).toThrow(UnauthorizedException);
     expect(webhookService.handleIosNotification).not.toHaveBeenCalled();
   });
