@@ -39,16 +39,6 @@ export class RegisterBusinessDto {
   promptpay_id: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(64)
-  line_destination?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(64)
-  line_user_id?: string;
-
-  @IsOptional()
   @IsUUID()
   package_id?: string;
 }

@@ -12,7 +12,6 @@ describe('PaymentController', () => {
   let controller: PaymentController;
   let paymentService: {
     createQrOrder: jest.Mock;
-    createLineLinkOrder: jest.Mock;
     getOrderOrFail: jest.Mock;
   };
 
@@ -42,8 +41,6 @@ describe('PaymentController', () => {
     callback_sent: false,
     callback_status_code: null,
     redirect_url: 'https://example.com/cb',
-    line_user_id: 'U-business-owner',
-    is_line_link: false,
     expires_at: new Date('2026-10-20T08:05:00.000Z'),
     paid_at: null,
     created_at: new Date('2026-10-20T08:00:00.000Z'),
@@ -52,7 +49,6 @@ describe('PaymentController', () => {
   beforeEach(async () => {
     paymentService = {
       createQrOrder: jest.fn(),
-      createLineLinkOrder: jest.fn(),
       getOrderOrFail: jest.fn(),
     };
 
@@ -67,15 +63,9 @@ describe('PaymentController', () => {
     controller = module.get<PaymentController>(PaymentController);
   });
 
-  it('configures RoleEnum metadata on createQr, createLineLinkQr and getOrder', () => {
+  it('configures RoleEnum metadata on createQr and getOrder', () => {
     expect(
       Reflect.getMetadata(ROLES_KEY, PaymentController.prototype.createQr),
-    ).toEqual([RoleEnum.BUSINESS, RoleEnum.ADMIN]);
-    expect(
-      Reflect.getMetadata(
-        ROLES_KEY,
-        PaymentController.prototype.createLineLinkQr,
-      ),
     ).toEqual([RoleEnum.BUSINESS, RoleEnum.ADMIN]);
     expect(
       Reflect.getMetadata(ROLES_KEY, PaymentController.prototype.getOrder),
@@ -119,36 +109,6 @@ describe('PaymentController', () => {
       expect.objectContaining({ zero_decimal: true, amount: 99 }),
     );
     expect(result).toEqual({ order_id: 'ord-99.00', decimal_ref: 0 });
-  });
-
-  it('delegates createLineLinkQr to PaymentService.createLineLinkOrder', async () => {
-    const dto = { redirect_url: 'http://localhost:3001/api/line-link/callback' };
-    paymentService.createLineLinkOrder.mockResolvedValue({
-      order_id: 'link-ord-1',
-      is_line_link: true,
-    });
-
-    const result = await controller.createLineLinkQr(
-      { user: businessUser } as any,
-      dto,
-    );
-
-    expect(paymentService.createLineLinkOrder).toHaveBeenCalledWith(
-      businessUser,
-      dto,
-    );
-    expect(result).toEqual({ order_id: 'link-ord-1', is_line_link: true });
-  });
-
-  it('passes an empty body for createLineLinkQr when no callback is requested', async () => {
-    paymentService.createLineLinkOrder.mockResolvedValue({ order_id: 'link-ord-2' });
-
-    await controller.createLineLinkQr({ user: businessUser } as any, {});
-
-    expect(paymentService.createLineLinkOrder).toHaveBeenCalledWith(
-      businessUser,
-      {},
-    );
   });
 
   it('returns order details when business user owns the order', async () => {

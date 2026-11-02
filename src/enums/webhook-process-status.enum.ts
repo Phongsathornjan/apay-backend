@@ -1,5 +1,5 @@
 /**
- * ผลลัพธ์การประมวลผล LINE Webhook (`webhook_logs.process_status`)
+ * ผลลัพธ์การประมวลผล Webhook แจ้งเตือนเงินเข้า (`webhook_logs.process_status`)
  * - `MATCHED`   : พบ Payment Order ที่ตรงกันและบันทึกเป็น `PAID` แล้ว
  * - `NO_MATCH`  : parse ข้อความได้แต่ไม่พบ Order ที่ตรงกัน
  * - `DUPLICATE` : ข้อความนี้เคยถูกประมวลผลไปแล้ว (idempotency)

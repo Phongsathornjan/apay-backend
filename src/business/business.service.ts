@@ -28,8 +28,6 @@ export interface RegisterBusinessInput {
   business_name: string;
   email: string;
   promptpay_id: string;
-  line_destination?: string;
-  line_user_id?: string;
   package_id?: string;
 }
 
@@ -41,7 +39,6 @@ export interface RegisterBusinessResult {
   business_name: string;
   email: string | null;
   promptpay_id: string;
-  line_user_id: string | null;
 }
 
 @Injectable()
@@ -59,18 +56,6 @@ export class BusinessService {
 
   findByUserId(userId: string): Promise<Business | null> {
     return this.businessRepository.findOne({ where: { user_id: userId } });
-  }
-
-  findByLineDestination(destination: string): Promise<Business | null> {
-    return this.businessRepository.findOne({
-      where: { line_destination: destination },
-    });
-  }
-
-  findByLineUserId(lineUserId: string): Promise<Business | null> {
-    return this.businessRepository.findOne({
-      where: { line_user_id: lineUserId },
-    });
   }
 
   assertBusinessAccess(user: AuthUser, businessId: string): void {
@@ -150,8 +135,6 @@ export class BusinessService {
           promptpay_id: dto.promptpay_id,
           api_key_prefix: null,
           api_key_hash: null,
-          line_destination: dto.line_destination ?? null,
-          line_user_id: dto.line_user_id ?? null,
           is_active: true,
         }),
       );
@@ -176,7 +159,6 @@ export class BusinessService {
         business_name: business.business_name,
         email: business.email,
         promptpay_id: business.promptpay_id,
-        line_user_id: business.line_user_id,
       };
     });
   }

@@ -21,10 +21,15 @@ export class WebhookLog {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'varchar', length: 100, name: 'line_message_id', unique: true })
-  line_message_id: string;
+  @Column({ type: 'varchar', length: 100, name: 'message_id', unique: true })
+  message_id: string;
 
-  @Column({ type: 'varchar', length: 64, name: 'matched_order_id', nullable: true })
+  @Column({
+    type: 'varchar',
+    length: 64,
+    name: 'matched_order_id',
+    nullable: true,
+  })
   matched_order_id: string | null;
 
   @ManyToOne(() => PaymentOrder, { nullable: true, onDelete: 'SET NULL' })
@@ -41,7 +46,12 @@ export class WebhookLog {
   })
   parsed_amount: number | null;
 
-  @Column({ type: 'varchar', length: 30, name: 'parsed_datetime', nullable: true })
+  @Column({
+    type: 'varchar',
+    length: 30,
+    name: 'parsed_datetime',
+    nullable: true,
+  })
   parsed_datetime: string | null;
 
   @Column({ type: 'jsonb', name: 'raw_payload' })

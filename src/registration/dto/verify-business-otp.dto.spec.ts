@@ -81,12 +81,10 @@ describe('VerifyBusinessOtpDto', () => {
     expect(propertyErrors(errors)).toContain('promptpay_id');
   });
 
-  it('accepts optional line fields and package_id but rejects a non-uuid package_id', async () => {
+  it('accepts optional package_id but rejects a non-uuid package_id', async () => {
     await expect(
       validateDto({
         ...VALID_PAYLOAD,
-        line_destination: 'U-destination',
-        line_user_id: 'U-owner',
         package_id: '0f8fad5b-d9cb-469f-a165-70867728950e',
       }),
     ).resolves.toHaveLength(0);

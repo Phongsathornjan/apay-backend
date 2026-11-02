@@ -11,8 +11,7 @@ import { RoleEnum } from '../enums';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 
-const RAW_API_KEY =
-  'apay_live_1a2b3c4d_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c';
+const RAW_API_KEY = 'apay_live_1a2b3c4d_9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -118,7 +117,6 @@ describe('AuthService', () => {
       businessService.findByUserId.mockResolvedValue({
         id: 'business-1',
         is_active: true,
-        line_user_id: 'U-owner',
       });
 
       const result = await service.login({
@@ -131,7 +129,6 @@ describe('AuthService', () => {
         username: 'merchant',
         role: RoleEnum.BUSINESS,
         business_id: 'business-1',
-        line_user_id: 'U-owner',
       });
       expect(businessService.updateRefreshTokenHash).toHaveBeenCalledWith(
         'business-1',
@@ -200,7 +197,6 @@ describe('AuthService', () => {
         business_name: 'Coffee Shop',
         email: 'owner@coffee-shop.com',
         promptpay_id: '0812345678',
-        line_user_id: null,
       });
 
       await expect(service.registerBusiness(payload)).resolves.toMatchObject({

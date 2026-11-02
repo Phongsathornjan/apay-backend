@@ -14,7 +14,6 @@ export const SENSITIVE_HEADER_KEYS = [
   'x-refresh-token',
   'refresh-token',
   'access-token',
-  'x-line-signature',
 ] as const;
 
 const SENSITIVE_HEADERS = new Set<string>(SENSITIVE_HEADER_KEYS);

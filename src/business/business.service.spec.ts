@@ -94,7 +94,7 @@ describe('BusinessService', () => {
     service = module.get<BusinessService>(BusinessService);
   });
 
-  it('finds business by id, userId, line_destination and line_user_id', async () => {
+  it('finds business by id and userId', async () => {
     businessRepository.findOne.mockResolvedValue({ id: 'biz-1' });
 
     await service.findById('biz-1');
@@ -105,16 +105,6 @@ describe('BusinessService', () => {
     await service.findByUserId('user-1');
     expect(businessRepository.findOne).toHaveBeenLastCalledWith({
       where: { user_id: 'user-1' },
-    });
-
-    await service.findByLineDestination('U123456');
-    expect(businessRepository.findOne).toHaveBeenLastCalledWith({
-      where: { line_destination: 'U123456' },
-    });
-
-    await service.findByLineUserId('U123456');
-    expect(businessRepository.findOne).toHaveBeenLastCalledWith({
-      where: { line_user_id: 'U123456' },
     });
   });
 
@@ -232,8 +222,6 @@ describe('BusinessService', () => {
           promptpay_id: '0812345678',
           api_key_prefix: null,
           api_key_hash: null,
-          line_destination: null,
-          line_user_id: null,
           is_active: true,
         }),
       );
@@ -245,11 +233,8 @@ describe('BusinessService', () => {
         business_name: 'Coffee Shop',
         email: 'owner@coffee-shop.com',
         promptpay_id: '0812345678',
-        line_user_id: null,
       });
-      expect(
-        subscriptionsService.assignOrChangePackage,
-      ).not.toHaveBeenCalled();
+      expect(subscriptionsService.assignOrChangePackage).not.toHaveBeenCalled();
     });
 
     it('hashes the password before saving it', async () => {
@@ -266,20 +251,14 @@ describe('BusinessService', () => {
     it('assigns the requested package within the same transaction', async () => {
       await service.registerBusiness({
         ...payload,
-        line_destination: 'U-destination',
-        line_user_id: 'U-owner',
         package_id: 'package-1',
       });
 
-      expect(businessRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          line_destination: 'U-destination',
-          line_user_id: 'U-owner',
-        }),
+      expect(subscriptionsService.assignOrChangePackage).toHaveBeenCalledWith(
+        'biz-1',
+        'package-1',
+        manager,
       );
-      expect(
-        subscriptionsService.assignOrChangePackage,
-      ).toHaveBeenCalledWith('biz-1', 'package-1', manager);
     });
 
     it('propagates package assignment errors so the transaction rolls back', async () => {

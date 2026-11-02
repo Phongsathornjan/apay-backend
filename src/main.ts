@@ -1,4 +1,3 @@
-
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
@@ -7,7 +6,7 @@ import { HttpErrorFilter } from './common/filters/exception.filter';
 import { buildCorsOptions } from './common/config/cors.config';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create(AppModule);
 
   app.enableCors(buildCorsOptions());
 
@@ -26,7 +25,7 @@ async function bootstrap() {
   app.enableVersioning({
     type: VersioningType.URI,
   });
-  
+
   await app.listen(process.env.PORT ?? 3000);
 }
 

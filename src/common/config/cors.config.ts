@@ -40,7 +40,7 @@ export function parseCorsOrigins(raw?: string | null): string[] {
  * Builds the Nest CORS options from the environment.
  *
  * - `CORS_ORIGINS=*` (or `CORS_ALLOW_ALL=true`) reflects any origin.
- * - Requests without an `Origin` header (curl, server-to-server, LINE webhook, payment callback)
+ * - Requests without an `Origin` header (curl, server-to-server, webhook, payment callback)
  *   are always allowed, because they are not subject to browser CORS checks.
  */
 export function buildCorsOptions(
