@@ -321,7 +321,7 @@ describe('DashboardService', () => {
   });
 
   describe('getTransactionsTimeseries', () => {
-    it('builds series for orders, paid, expired, GMV, AOV and status breakdown', async () => {
+    it('builds series for orders, paid, expired and status breakdown', async () => {
       businessesRepository.findOne.mockResolvedValue({
         id: 'biz-1',
         business_name: 'Coffee Shop',
@@ -353,12 +353,15 @@ describe('DashboardService', () => {
         interval: 'day',
       });
 
-      const gmvSeries = result.series.find((s) => s.key === 'gmv');
-      const aovSeries = result.series.find(
-        (s) => s.key === 'average_order_value',
-      );
-      expect(gmvSeries?.points[0].value).toBe(200.5);
-      expect(aovSeries?.points[0].value).toBe(200.5);
+      expect(result.series.map((s) => s.key)).toEqual([
+        'orders_created',
+        'paid_count',
+        'expired_count',
+      ]);
+      expect(result.series.every((s) => s.points.length === 1)).toBe(true);
+      expect(result.series[0].points[0].value).toBe(2);
+      expect(result.series[1].points[0].value).toBe(1);
+      expect(result.series[2].points[0].value).toBe(1);
       expect(result.status_breakdown).toEqual({
         PAID: 1,
         UNVERIFIED: { active: 0, expired: 1 },

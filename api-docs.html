@@ -3444,7 +3444,7 @@
         "/api/v1/dashboard/transactions/timeseries": {
           get: {
             tags: ["Dashboard"],
-            summary: "กราฟ Timeseries คำสั่งซื้อ / ยอดชำระ / GMV / AOV และสัดส่วนสถานะ",
+            summary: "กราฟ Timeseries คำสั่งซื้อ / ยอดชำระ / รายการหมดอายุ และสัดส่วนสถานะ (ไม่รวม GMV / AOV)",
             security: [{ BearerAuth: [] }],
             parameters: [
               { $ref: "#/components/parameters/CorrelationIdHeader" },

@@ -529,7 +529,6 @@ export class DashboardService {
     const ordersCreatedMap = new Map<number, number>();
     const paidCountMap = new Map<number, number>();
     const expiredCountMap = new Map<number, number>();
-    const gmvMap = new Map<number, number>();
 
     let statusPaid = 0;
     let statusUnverifiedActive = 0;
@@ -582,19 +581,7 @@ export class DashboardService {
           range.interval,
         ).getTime();
         paidCountMap.set(paidBucket, (paidCountMap.get(paidBucket) ?? 0) + 1);
-        gmvMap.set(
-          paidBucket,
-          (gmvMap.get(paidBucket) ?? 0) + Number(order.total_amount ?? 0),
-        );
       }
-    }
-
-    const aovMap = new Map<number, number>();
-    for (const bucket of buckets) {
-      const key = bucket.getTime();
-      const paid = paidCountMap.get(key) ?? 0;
-      const gmv = gmvMap.get(key) ?? 0;
-      aovMap.set(key, paid > 0 ? gmv / paid : 0);
     }
 
     return {
@@ -625,26 +612,6 @@ export class DashboardService {
             buckets,
             range.interval,
             expiredCountMap,
-          ),
-        },
-        {
-          key: 'gmv',
-          label: 'GMV',
-          points: this.buildZeroFilledPoints(
-            buckets,
-            range.interval,
-            gmvMap,
-            2,
-          ),
-        },
-        {
-          key: 'average_order_value',
-          label: 'Average Order Value',
-          points: this.buildZeroFilledPoints(
-            buckets,
-            range.interval,
-            aovMap,
-            2,
           ),
         },
       ],
