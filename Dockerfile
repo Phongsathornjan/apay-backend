@@ -7,7 +7,7 @@
 # ---------------------------------------------------------------------------
 
 # ---------- base: Node + pnpm (เวอร์ชันเดียวกับที่ใช้ dev) ----------
-FROM node:24-bookworm-slim AS base
+FROM node:26-bookworm-slim AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     CI=true
@@ -32,7 +32,7 @@ COPY . .
 RUN pnpm build && pnpm prune --prod
 
 # ---------- runtime: image จิ๋ว ไม่มี source/toolchain/secret ----------
-FROM node:24-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     PORT=3000
 WORKDIR /app
